@@ -1,0 +1,37 @@
+\documentclass[11pt]{article}
+\usepackage[left=0.5in,top=0.75in,right=0.5in,bottom=0.75in]{geometry}
+\usepackage{amsthm,amsfonts,amssymb,float,graphicx,amsmath,siunitx,longtable,tabularx,enumitem,bm,caption,subcaption,multirow,stmaryrd,xcolor}
+\usepackage[version=4]{mhchem}
+\usepackage[section]{placeins}
+\usepackage[version=4]{mhchem}
+
+\input{../../Macros.tex}
+\usepackage{hyperref}
+\usepackage[url=false,style=ieee]{biblatex}
+\addbibresource{../../Thesis Proposal/Proposal_bib.bib}
+\AtEveryBibitem{\clearfield{month}}
+\AtEveryBibitem{\clearfield{day}}
+
+\newcommand{\vect}[1]{\underline{#1}}
+\newcommand{\matr}[1]{\underline{\underline{#1}}}
+
+\title{Ph.D. Project 1}
+
+\author{Chris Womack}
+
+\numberwithin{equation}{section}
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Enjoy.
+\end{abstract}
+
+\clearpage
+
+\input{math_and_stuff.tex}
+
+\printbibliography
+
+\end{document}
