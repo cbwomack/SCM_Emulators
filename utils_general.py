@@ -18,8 +18,6 @@ import matplotlib as mpl
 import matplotlib.colors as mcolors
 from matplotlib.lines import Line2D
 
-
-
 #################### General Helper Functions ####################
 
 ##### Forcing profiles
@@ -138,6 +136,24 @@ def calc_modes_1D(T, t):
     a = s*Vh
     return g, a
 
+def calc_modes_2D(T):
+  g, s, Vh = linalg.svd(T, full_matrices=False)
+  a = s.reshape(len(s),1)*Vh
+  return g, a
+
+def calc_modes(T):
+    # Handle 1D case by reshaping to a 2D array
+    if T.ndim == 1:
+        T = T.reshape(1, -1)
+
+    # Perform SVD
+    g, s, Vh = linalg.svd(T, full_matrices=False)
+    a = s[:, np.newaxis] * Vh  # Broadcasting to form 'a'
+
+    return g, a
+
+#####################
+
 def calc_L_direct_1D(T, F, t, t_range, C, p_order, modal=False, g=None):
 
   T = T[t_range[0]:t_range[1]]
@@ -147,7 +163,6 @@ def calc_L_direct_1D(T, F, t, t_range, C, p_order, modal=False, g=None):
   R = np.copy(T).reshape(1,len(t))
   dR = finite_difference_derivative(T, t, p_order)
   dR_dt = np.copy(dR).reshape(1,len(t))
-  #dR_dt = calc_derivative(R, t)
   R_p = linalg.pinv(R)
 
   if modal:
@@ -174,6 +189,7 @@ def estimate_T_1D(T_analytic, F_all, experiments, regions, t, C, mode, op_raw, o
       if mode == 'L':
         T_est_raw[exp][reg] = reconstruct_T(F_all[exp], C[i], t, op_raw[exp][reg], T0, dt)
         T_est_modal[exp][reg] = reconstruct_T(F_all[exp], C[i], t, op_modal[exp][reg], T0, dt)
+
       elif mode == 'G':
         T_est_raw[exp][reg] = convolve(op_raw[exp][reg]*dt, F_all[exp])[:len(t)]
         if len(op_modal[exp][reg]) == 1:
@@ -183,41 +199,11 @@ def estimate_T_1D(T_analytic, F_all, experiments, regions, t, C, mode, op_raw, o
 
   return T_est_raw, T_est_modal
 
-def plot_uncoupled(T, t, experiments, regions, colors, soln_type, ensemble=False):
-
-  n_exp = len(experiments)
-  n_reg = len(regions)
-  fig, ax = plt.subplots(1, n_exp, figsize=(5*n_exp,5), sharey=True)
-
-  for i in range(n_exp):
-    exp = experiments[i]
-    for j in range(n_reg):
-      reg = regions[j]
-      if ensemble:
-        T_mean = np.mean(T[exp][reg], axis=0)
-        T_std = np.std(T[exp][reg], axis=0)
-
-        ax[i].plot(t, T_mean, c=colors[j], label='Ensemble Mean', linewidth=2)
-        ax[i].fill_between(t, T_mean - T_std, T_mean + T_std, color=colors[j], alpha=0.5, label='Ensemble Spread (±1 std)')
-        ax[i].fill_between(t, T_mean - 2*T_std, T_mean + 2*T_std, color=colors[j], alpha=0.2, label='Ensemble Spread (±2 std)')
-
-      else:
-        ax[i].plot(t, T[exp][reg], c=colors[j], label=regions[j], lw=2)
-
-    ax[i].set_title(f'{soln_type} - {experiments[i]}')
-    ax[i].set_xlabel('Year')
-    #ax[i].legend()
-
-  ax[0].set_ylabel(r'$\Delta T$ [$^\circ$C]')
-  plt.tight_layout()
-
-  return
-
 def plot_box_model(T, t, experiments, regions, colors, soln_type, coupled=False, ensemble=False):
 
   n_exp = len(experiments)
   n_reg = len(regions)
-  fig, ax = plt.subplots(1, n_exp, figsize=(5*n_exp,5))#, sharey=True, constrained_layout=True)
+  fig, ax = plt.subplots(1, n_exp, figsize=(5*n_exp,5), sharey=True, constrained_layout=True)
 
   for i, exp in enumerate(experiments):
     for j, reg in enumerate(regions):
@@ -226,88 +212,24 @@ def plot_box_model(T, t, experiments, regions, colors, soln_type, coupled=False,
           T_temp = np.array(T[exp])[j,:]
         else:
           T_temp = T[exp][reg]
-        ax[i].plot(t, T_temp, c=colors[j], label=regions[j], lw=3)
+        ax[i].plot(t, T_temp, c=colors(j), label=regions[j], lw=3)
 
       else:
         T_temp = T[exp][:,j,:]
         T_mean = np.mean(T_temp, axis=0)
         T_std = np.std(T_temp, axis=0)
 
-        ax[i].plot(t, T_mean, c=colors[j], label='Ensemble Mean', linewidth=3)
-        ax[i].fill_between(t, T_mean - T_std, T_mean + T_std, color=colors[j], alpha=0.5, label='Ensemble Spread (±1 std)')
-        ax[i].fill_between(t, T_mean - 2*T_std, T_mean + 2*T_std, color=colors[j], alpha=0.2, label='Ensemble Spread (±2 std)')
+        ax[i].plot(t, T_mean, c=colors(j), label='Ensemble Mean', linewidth=3)
+        ax[i].fill_between(t, T_mean - T_std, T_mean + T_std, color=colors(j), alpha=0.5, label='Ensemble Spread (±1 std)')
+        ax[i].fill_between(t, T_mean - 2*T_std, T_mean + 2*T_std, color=colors(j), alpha=0.2, label='Ensemble Spread (±2 std)')
 
-    ax[i].set_title(f'{soln_type} - {experiments[i]}')
+    ax[i].set_title(f'{experiments[i]}')
     ax[i].set_xlabel('Year')
     if not ensemble:
       ax[i].legend()
 
   ax[0].set_ylabel(r'$\Delta T$ [$^\circ$C]')
-
-  return
-
-def plot_box_model2(T, t, experiments, regions, colors, soln_type, coupled=False, ensemble=False, T2=None):
-
-  n_exp = len(experiments)
-  n_reg = len(regions)
-  fig, ax = plt.subplots(2, 2, figsize=(12,12), sharex=True, sharey=True, constrained_layout=True)
-
-  for i, exp in enumerate(experiments):
-    if i == 0:
-      r, c = 0, 0
-    elif i == 1:
-      r, c = 0, 1
-    elif i == 2:
-      r, c = 1, 0
-    else:
-      r, c = 1, 1
-
-    for j, reg in enumerate(regions):
-      if ensemble is False:
-        if coupled:
-          T_temp = np.array(T[exp])[j,:]
-          T_temp_2 = np.array(T2[exp])[j,:]
-        else:
-          T_temp = T[exp][reg]
-        n=15
-        ax[r,c].plot(t, T_temp, c=brewer2_light(j), label=regions[j], lw=4)
-        ax[r,c].plot(t[::n], T_temp_2[::n], 'o', c=brewer2_light(j), lw=4, markerfacecolor='white')
-
-      else:
-        T_temp = T[exp][:,j,:]
-        T_mean = np.mean(T_temp, axis=0)
-        T_std = np.std(T_temp, axis=0)
-
-        ax[i].plot(t, T_mean, c=colors[j], label='Ensemble Mean', linewidth=3)
-        ax[i].fill_between(t, T_mean - T_std, T_mean + T_std, color=colors[j], alpha=0.5, label='Ensemble Spread (±1 std)')
-        ax[i].fill_between(t, T_mean - 2*T_std, T_mean + 2*T_std, color=colors[j], alpha=0.2, label='Ensemble Spread (±2 std)')
-
-    ax[r,c].set_title(f'{experiments[i]}',fontsize=36)
-    ax[r,c].tick_params(axis='both', which='major', labelsize=28)
-
-  if not ensemble:
-    custom_marker = Line2D(
-    [0], [0],
-    marker='o',
-    color='black',             # Line color (ignored for the marker)
-    markerfacecolor='white',   # White marker face
-    markersize=10,
-    linestyle='None'           # No line
-    )
-
-    handles, labels = plt.gca().get_legend_handles_labels()
-    handles.append(custom_marker)
-    labels.append('Emulator')
-    ax[0,0].legend(handles,labels,fontsize=28,loc='upper left')
-
-  #fig.suptitle('Experimental Overview',fontsize=32)
-
-  ax[1,0].set_xlabel('Year',fontsize=36)
-  ax[1,1].set_xlabel('Year',fontsize=36)
-  ax[0,0].set_ylabel(r'$\Delta T$ [$^\circ$C]',fontsize=36)
-  ax[1,0].set_ylabel(r'$\Delta T$ [$^\circ$C]',fontsize=36)
-
-  plt.savefig('fig2b.pdf',dpi=500)
+  fig.suptitle(f'{soln_type}', fontsize=20)
 
   return
 
@@ -333,71 +255,6 @@ def gen_F_ensemble(F, t, K, N_ensemble, experiments):
     F_ensemble[exp] = K*xi + F[exp]
 
   return F_ensemble
-
-def timestep_uncoup(t, experiments, regions, F, lam, C, dt, N_ensemble = None):
-
-  T, g, a = {}, {}, {}
-  for exp in experiments:
-    T[exp], g[exp], a[exp] = {}, {}, {}
-    for i in range(len(regions)):
-      reg = regions[i]
-
-      if N_ensemble is None:
-        T_temp = np.zeros(len(t))
-      else:
-        T_temp = np.zeros((N_ensemble, len(t)))
-        g_temp, a_temp = np.zeros((N_ensemble, 1)), np.zeros((N_ensemble, len(t)))
-
-      for j in range(1, len(t)):
-        if N_ensemble is None:
-          T_temp[j] = T_temp[j-1] + (lam[i]/C[i] * T_temp[j-1] + F[exp][j-1]/C[i]) * dt
-        else:
-          T_temp[:,j] = T_temp[:,j-1] + (lam[i]/C[i] * T_temp[:,j-1] + F[exp][:,j-1]/C[i]) * dt
-
-      if N_ensemble is not None:
-        for n in range(N_ensemble):
-          g_temp[n,:], a_temp[n, :] = calc_modes_1D(T_temp[n,:], t)
-        g[exp][reg], a[exp][reg] = np.copy(g_temp), np.copy(a_temp)
-
-      T[exp][reg] = np.copy(T_temp)
-
-      if N_ensemble is None:
-        g[exp][reg], a[exp][reg] = calc_modes_1D(T[exp][reg], t)
-
-  return T, g, a
-
-def timestep_coup(t, experiments, F, L, dt, gamma = None, N_ensemble = None):
-
-  if gamma is None:
-    gamma = np.array([1.0]*len(L))
-
-  T, g, a = {}, {}, {}
-  for exp in experiments:
-    T[exp], g[exp], a[exp] = {}, {}, {}
-
-    if N_ensemble is None:
-      T_temp = np.zeros((3, len(t)))
-    else:
-      T_temp = np.zeros((N_ensemble, 3, len(t)))
-      g_temp, a_temp = np.zeros((N_ensemble, 3, 3)), np.zeros((N_ensemble, 3, len(t)))
-
-    for j in range(1, len(t)):
-      if N_ensemble is None:
-        T_temp[:,j] = T_temp[:,j-1] + (L @ T_temp[:,j-1] + gamma * F[exp][j-1]) * dt
-      else:
-        T_temp[:,:,j] = T_temp[:,:,j-1] + (T_temp[:, :, j-1] @ L.T + gamma[np.newaxis, :] * F[exp][:,j-1][:, np.newaxis]) * dt
-
-      if N_ensemble is not None:
-        for n in range(N_ensemble):
-          g_temp[n,:], a_temp[n, :] = calc_modes_2D(T_temp[n,:,:])
-        g[exp], a[exp] = np.copy(g_temp), np.copy(a_temp)
-
-      T[exp] = np.copy(T_temp)
-
-      if N_ensemble is None:
-        g[exp], a[exp] = calc_modes_2D(T[exp])
-
-  return T, g, a
 
 def calc_L2(T_analytic, T_est, experiments, regions, mode, coupled=False):
   L2 = np.zeros(len(T_analytic) + 1)
@@ -551,6 +408,7 @@ def calc_L_direct_2D(T, F, t, gamma=None, modal=False, g=None, plot_L = False):
   R_p = linalg.pinv(R)
 
   if not is_pseudo_inverse(R, R_p):
+    print('hi')
     U, s, Vt = np.linalg.svd(R, full_matrices=False)
 
     # Regularization parameter
@@ -567,7 +425,7 @@ def calc_L_direct_2D(T, F, t, gamma=None, modal=False, g=None, plot_L = False):
     F = F_spatial
 
   if modal:
-    N = np.subtract(dR_dt, F) @ R_p
+    N = np.subtract(dR_dt, np.linalg.pinv(g) @ np.tile(F, (len(g), 1))) @ R_p
     L = g @ N @ linalg.pinv(g)
   else:
     L = np.subtract(dR_dt, F) @ R_p
@@ -597,7 +455,7 @@ def reconstruct_T_2D(F, T, L, T0, dt, gamma=None):
 
   return T_G
 
-def estimate_T_2D(T_analytic, F_all, experiments, t, mode, op_raw, op_modal, g, T0, dt, gamma=None):
+def estimate_T_2D(T_analytic, F_all, experiments, t, mode, op_raw, op_modal, T0, dt, gamma=None):
   T_est_raw, T_est_modal = {}, {}
 
   # Iterate over forcing profiles
@@ -606,42 +464,19 @@ def estimate_T_2D(T_analytic, F_all, experiments, t, mode, op_raw, op_modal, g, 
 
     if mode == 'L':
       T_est_raw[exp] = reconstruct_T_2D(F_all[exp], T_analytic[exp], op_raw[exp], T0, dt, gamma)
-      #T_est_modal[exp] = reconstruct_T_2D(F_all[exp], T_analytic[exp], op_modal[exp], T0, dt)
+      T_est_modal[exp] = reconstruct_T_2D(F_all[exp], T_analytic[exp], op_modal[exp], T0, dt, gamma)
 
     elif mode == 'G':
       if gamma is not None:
-        T_est_raw[exp] = []
+        T_est_raw[exp] ,T_est_modal[exp] = [], []
         for i in range(len(T_analytic[exp])):
           T_est_raw[exp].append((op_raw[exp][i].T @ gamma) @ F_toeplitz.T)
+          T_est_modal[exp].append((op_modal[exp][i].T @ gamma) @ F_toeplitz.T)
       else:
         T_est_raw[exp] = (op_raw[exp]) @ F_toeplitz.T
+        T_est_modal[exp] = (op_modal[exp]) @ F_toeplitz.T
 
   return T_est_raw, T_est_modal
-
-# I use this method, written up this paper; you can talk to me about it after the talk
-# Focus on the importance of the research
-## 1 minute intro + context
-## 1 minute methods
-## 4 minutes results - essentially 4 figures (or 2 if they're really good)
-## 2 minutes conclusions
-
-# Risk showing something that's not ready for prime time
-# Best bet to split half and half, here's the thing we did (JAMES) and here's where we're going
-# 1st minute overall logic of the research (e.g. shortcomings of previous approaches)
-# highlight JAMES paper first and foremost; show off the accomplishment!
-# present the current work as an extension to that
-
-# Making climate stripes for all CMIP - resolved spatially outputs, now cracking spatial inputs
-
-# If system is more damped than the models say, less variability in the historical
-# training on different realizations/reanalysis/historical data - estimating chaos in the system?
-# To what degree does the geometry of the system impact the result? Lat/lon grid weighting needs to be taken into account
-
-
-def calc_modes_2D(T):
-  g, s, Vh = linalg.svd(T, full_matrices=False)
-  a = s.reshape(len(s),1)*Vh
-  return g, a
 
 def calc_G_deconv_2D(T, F, dt, gamma=None):
   F_toeplitz = sparse.csr_matrix(toeplitz(F, np.zeros_like(F)))
@@ -671,7 +506,7 @@ def opt_h_lam_2D(params, T, F, t, m, dt):
   return linalg.norm(T - model)
 
 ###### new
-def opt_v_lam_2D(params, T, F, t, m, dt, gamma):
+def opt_v_lam_2D(params, T, F, t, m, dt, gamma, g=None):
   # Assume the number of spatial points is the length of the gamma vector
   k = gamma.shape[0]
 
@@ -683,29 +518,36 @@ def opt_v_lam_2D(params, T, F, t, m, dt, gamma):
 
   F_toeplitz = toeplitz(F, np.zeros_like(F))
 
-  G_opt = np.zeros((k, len(t)))
+  if g is not None:
+    g_inv = np.linalg.pinv(g)
+    G_opt = np.zeros((len(g_inv), len(t)))
+  else:
+    G_opt = np.zeros((k, len(t)))
 
   for i, n in enumerate(t):
     # Create diagonal matrix of exp(lambda_i * t) for this particular time t
     exp_diag_trunc = np.diag(np.exp(lam * n))
 
     # Compute exp(L * t) using eigenvalue expansion: v * exp(diag(lambda) * t) * v^-1
-    exp_Lt_trunc = v @ exp_diag_trunc @ w
+    if g is not None:
+      exp_Lt_trunc = g_inv @ v @ exp_diag_trunc @ w
+    else:
+      exp_Lt_trunc = v @ exp_diag_trunc @ w
 
     # Compute G(x, t) by multiplying exp(L * t) with gamma
     G_opt[:, i] = np.dot(exp_Lt_trunc, gamma)
 
-  model = (G_opt * dt) @ F_toeplitz.T
+    model = (G_opt * dt) @ F_toeplitz.T
 
   # Account for weight in different boxes
-  if True:
-    weights = np.array([1,2,4])
+  if False:
+    weights = np.array([10,1,1])
     weighted_error = (T - model) * weights[:, np.newaxis]
     return linalg.norm(weighted_error)
 
   return linalg.norm(T - model)
 
-def apply_v_lam_2D(params, t, m, gamma, dt):
+def apply_v_lam_2D(params, t, m, gamma, dt, g=None):
 
   # Assume the number of spatial points is the length of the gamma vector
   k = gamma.shape[0]
@@ -716,14 +558,21 @@ def apply_v_lam_2D(params, t, m, gamma, dt):
   w = np.linalg.pinv(v)             # Compute the pseudo-inverse of v (v^-1)
   lam = params[m * k:m * k + m]    # The next m values are the eigenvalues
 
-  G_opt = np.zeros((k, len(t)))
+  if g is not None:
+    g_inv = np.linalg.pinv(g)
+    G_opt = np.zeros((len(g_inv), len(t)))
+  else:
+    G_opt = np.zeros((k, len(t)))
 
   for i, n in enumerate(t):
     # Create diagonal matrix of exp(lambda_i * t) for this particular time t
     exp_diag_trunc = np.diag(np.exp(lam * n))
 
     # Compute exp(L * t) using eigenvalue expansion: v * exp(diag(lambda) * t) * v^-1
-    exp_Lt_trunc = v @ exp_diag_trunc @ w
+    if g is not None:
+      exp_Lt_trunc = g_inv @ v @ exp_diag_trunc @ w
+    else:
+      exp_Lt_trunc = v @ exp_diag_trunc @ w
 
     # Compute G(x, t) by multiplying exp(L * t) with gamma
     G_opt[:, i] = np.dot(exp_Lt_trunc, gamma)
@@ -847,67 +696,17 @@ def plot_2D(T, t_mesh, x_mesh, experiments, soln_type, T_2 = None):
     else:
       cf = ax[i].contourf(t_mesh, x_mesh, T[exp], vmin=global_min, vmax=global_max)
     colorbars.append(cf)
-    ax[i].set_title(f'{soln_type} - {experiments[i]}')
-    ax[i].set_xlabel('Time (year)')
+    ax[i].set_title(f'{experiments[i]}')
+    ax[i].set_xlabel('Time')
 
-  ax[0].set_ylabel('Location (m)')
+  ax[0].set_ylabel('Location')
 
-  cbar = fig.colorbar(colorbars[2], ax=ax, orientation='vertical', fraction=0.025, pad=0.04)
+  cbar = fig.colorbar(colorbars[-1], ax=ax, orientation='vertical', fraction=0.025, pad=0.04)
   cbar.set_label('Temperature (or other variable)')
 
+  fig.suptitle(f'{soln_type}')
   #plt.tight_layout()
 
-  return
-
-def plot_2D2(T, t_mesh, x_mesh, experiments, soln_type, T_2 = None):
-
-  if T_2 is not None:
-    import copy
-    T_sub = {}
-    for exp in experiments:
-      T_sub[exp] = T[exp] - T_2[exp]
-    T = copy.copy(T_sub)
-
-  n_exp = len(experiments)
-  fig, ax = plt.subplots(2, 2, figsize=(12,12), sharey=True, sharex=True, constrained_layout=True)
-
-  # Compute the global min and max across all experiments
-  global_min = np.min([np.min(T[exp]) for exp in experiments])
-  global_max = np.max([np.max(T[exp]) for exp in experiments])
-  colorbars = []
-
-  for i, exp in enumerate(experiments):
-    if i == 0:
-      r, c = 0, 0
-    elif i == 1:
-      r, c = 0, 1
-    elif i == 2:
-      r, c = 1, 0
-    else:
-      r, c = 1, 1
-    if T_2 is not None:
-      cf = ax[r,c].contourf(x_mesh, t_mesh, T[exp], vmin=global_min, vmax=global_max, cmap='RdBu')
-    else:
-      cf = ax[r,c].contourf(x_mesh, t_mesh, T[exp], vmin=global_min, vmax=global_max)
-
-    colorbars.append(cf)
-    ax[r,c].set_title(f'{experiments[i]}',fontsize=36)
-    ax[r,c].tick_params(axis='both', which='major', labelsize=24)
-    ax[r,c].get_xaxis().set_ticks([])
-    ax[r,c].get_yaxis().set_ticks([])
-  
-  ax[0,0].set_ylabel(r'Time $(t)$',fontsize=36)
-  ax[1,0].set_ylabel(r'Time $(t)$',fontsize=36)
-
-  ax[1,0].set_xlabel(r'Position ($\mathbf{x}$)',fontsize=36)
-  ax[1,1].set_xlabel(r'Position ($\mathbf{x}$)',fontsize=36)
-
-  cbar = fig.colorbar(colorbars[2], ax=ax, orientation='vertical', fraction=0.075, pad=0.02)
-  cbar.ax.tick_params(labelsize=28) 
-
-  cbar.set_label(r'$\Delta T$ [$^\circ$C]',fontsize=36)
-
-  #plt.savefig('fig3.pdf',dpi=500)
   return
 
   ################### Other
