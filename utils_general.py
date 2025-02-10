@@ -835,7 +835,21 @@ def is_pseudo_inverse(A, A_pseudo_inv):
 
     return condition1 and condition2 and condition3 and condition4
 
+def L_to_G(L,t):
+  k = len(L)
+  gamma = np.ones(k)
 
+  lam, v = np.linalg.eig(L)
+  w = np.linalg.pinv(v)
+
+  G = np.zeros((k, len(t)))
+
+  for i, n in enumerate(t):
+    exp_L = np.diag(np.exp(lam * n))
+    exp_Lt = v @ exp_L @ w
+    G[:, i] = np.dot(exp_Lt, gamma)
+
+  return G
 
 ######################## Plot Colormap ###########################
 # Credit: https://colorbrewer2.org/#type=qualitative&scheme=Set2&n=8

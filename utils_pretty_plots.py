@@ -122,3 +122,75 @@ def plot_2D2(T, t_mesh, x_mesh, experiments, soln_type, T_2 = None):
 
   #plt.savefig('fig3.pdf',dpi=500)
   return
+
+from matplotlib.patches import Patch
+
+years = np.linspace(0, 400, 400)
+
+atmosphere = 2.5 * np.exp(-((years - 200) / 100)**2)
+shallow_ocean = 1.2 * np.exp(-((years - 210) / 100)**2)
+deep_ocean = 0.9 * np.exp(-((years - 300) / 140)**2)
+global_avg = (atmosphere*1/6 + shallow_ocean*1/6 + deep_ocean*4/6)
+
+fill_start = 200
+fill_end_1 = 210
+fill_mask_1 = (years >= fill_start) & (years <= fill_end_1)
+fill_end_2 = 300
+fill_mask_2 = (years >= fill_start) & (years <= fill_end_2)
+
+fig, ax = plt.subplots(figsize=(8,8),constrained_layout=True)
+ax.plot(atmosphere,lw=3,label='Atmosphere',c=utils_general.brewer2_light(0))
+#ax.plot(shallow_ocean,lw=3,label='Shallow Ocean',c=utils_general.brewer2_light(1))
+#ax.plot(deep_ocean,lw=3,label='Deep Ocean',c=utils_general.brewer2_light(2))
+#ax.plot(global_avg,lw=3,label='Global Avg.',c=utils_general.brewer2_light(3))
+ax.axvline(x=200,lw=3,ls='--',c='k',label='Peak Forcing')
+
+#ax.fill_between(years, shallow_ocean, where=fill_mask_1, color=utils_general.brewer2_light(1), alpha=0.4)
+#ax.fill_between(years, deep_ocean, where=fill_mask_2, color=utils_general.brewer2_light(2), alpha=0.4)
+
+#gray_patch = Patch(color='gray', alpha=0.3, label='Delayed Warming')
+
+handles, labels = ax.get_legend_handles_labels()
+#handles.append(gray_patch)
+#labels.append('Delayed Warming')
+
+ax.set_ylabel(r'$\Delta T$ [$^\circ$C]',fontsize=24)
+ax.set_xlabel('Year',fontsize=24)
+ax.tick_params(axis='both', which='major', labelsize=20)
+ax.legend(handles=handles, labels=labels,loc='upper left',fontsize=24)
+
+plt.savefig('warming_1.png',dpi=500)
+
+G_1 = L_to_G(L_raw_method_2['2xCO2'],utils_coup.t)
+G_2 = L_to_G(L_raw_method_2['4xCO2'],utils_coup.t)
+G_3 = L_to_G(L_raw_method_2['High Emissions'],utils_coup.t)
+G_4 = L_to_G(L_raw_method_2['Overshoot'],utils_coup.t)
+
+i=0
+stop = 30
+
+t_p=np.arange(0,stop)
+
+fig, ax = plt.subplots(figsize=(8,4), constrained_layout=True)
+ax.fill_between(t_p,G_1[i].T[0:stop],G_4[i].T[0:stop],color=utils_general.brewer2_light(0),alpha=0.4)
+ax.plot(G_1[i].T[0:stop],lw=3,c=utils_general.brewer2_light(0))
+ax.plot(G_4[i].T[0:stop],lw=3,c=utils_general.brewer2_light(0))
+ax.set_title('Atmosphere Response Function Spread from DMD',fontsize=24)
+ax.set_ylabel('Magnitude',fontsize=24)
+ax.set_xlabel('Year',fontsize=24)
+ax.tick_params(axis='both', which='major', labelsize=20)
+
+plt.savefig('spread_atm.png',dpi=500)
+
+G_2 = G_raw_method_3['2xCO2']
+fig, ax = plt.subplots(figsize=(8,4), constrained_layout=True)
+ax.plot(G_2[0],lw=3,c=utils_general.brewer2_light(0),label='Atmosphere')
+ax.plot(G_2[1],lw=3,c=utils_general.brewer2_light(1),label='Shallow Ocean')
+ax.plot(G_2[2],lw=3,c=utils_general.brewer2_light(2),label='Deep Ocean')
+ax.set_title('Response Functions from Deconvolution',fontsize=24)
+ax.set_ylabel('Magnitude',fontsize=24)
+ax.set_xlabel('Year',fontsize=24)
+ax.legend(fontsize=20)
+ax.tick_params(axis='both', which='major', labelsize=20)
+
+plt.savefig('G_deconv.png',dpi=500)
