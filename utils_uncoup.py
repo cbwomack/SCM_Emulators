@@ -21,6 +21,10 @@ lam = np.array([-0.86, -2.0, -0.67])
 T0 = 0 # K
 F0 = 1
 
+L = np.array([[lam[0]/C[0], 0, 0],
+              [0, lam[1]/C[1], 0],
+              [0, 0, lam[2]/C[2]]])
+
 # Forcing parameters
 ## 2xCO2 and 4xCO2 (constant forcing)
 F_2xCO2 = utils_general.F_const(t, 3.7)
@@ -63,8 +67,9 @@ def create_uncoup(noisy=False):
   if noisy:
     pass
   else:
-    T_ODE, g_ODE, a_ODE = timestep_uncoup(t, experiments, regions, F_all, lam, C, dt)
-    utils_general.plot_box_model(T_ODE, t, experiments, regions, colors, soln_type='Noiseless ODE Solutions')
+    #T_ODE, g_ODE, a_ODE = timestep_uncoup(t, experiments, regions, F_all, lam, C, dt)
+    T_ODE, g_ODE, a_ODE = timestep_coup(t, experiments, F_all, L, dt, C)
+    utils_general.plot_box_model(T_ODE, t, experiments, regions, colors, soln_type='Noiseless ODE Solutions', coupled=True)
 
   return T_ODE, g_ODE, a_ODE
 
@@ -201,6 +206,39 @@ def timestep_uncoup(t, experiments, regions, F, lam, C, dt, N_ensemble = None):
 
       if N_ensemble is None:
         g[exp][reg], a[exp][reg] = utils_general.calc_modes(T[exp][reg])
+
+  return T, g, a
+
+def timestep_coup(t, experiments, F, L, dt, C, gamma = None, N_ensemble = None):
+
+  if gamma is None:
+    gamma = np.array([1.0/C[0], 1.0/C[1], 1.0/C[2]])
+
+  T, g, a = {}, {}, {}
+  for exp in experiments:
+    T[exp], g[exp], a[exp] = {}, {}, {}
+
+    if N_ensemble is None:
+      T_temp = np.zeros((3, len(t)))
+    else:
+      T_temp = np.zeros((N_ensemble, 3, len(t)))
+      g_temp, a_temp = np.zeros((N_ensemble, 3, 3)), np.zeros((N_ensemble, 3, len(t)))
+
+    for j in range(1, len(t)):
+      if N_ensemble is None:
+        T_temp[:,j] = T_temp[:,j-1] + (L @ T_temp[:,j-1] + gamma * F[exp][j-1]) * dt
+      else:
+        T_temp[:,:,j] = T_temp[:,:,j-1] + (T_temp[:, :, j-1] @ L.T + gamma[np.newaxis, :] * F[exp][:,j-1][:, np.newaxis]) * dt
+
+      if N_ensemble is not None:
+        for n in range(N_ensemble):
+          g_temp[n,:], a_temp[n, :] = utils_general.calc_modes(T_temp[n,:,:])
+        g[exp], a[exp] = np.copy(g_temp), np.copy(a_temp)
+
+      T[exp] = np.copy(T_temp)
+
+      if N_ensemble is None:
+        g[exp], a[exp] = utils_general.calc_modes(T[exp])
 
   return T, g, a
 
