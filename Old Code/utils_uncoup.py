@@ -67,9 +67,9 @@ def create_uncoup(noisy=False):
   if noisy:
     pass
   else:
-    #T_ODE, g_ODE, a_ODE = timestep_uncoup(t, experiments, regions, F_all, lam, C, dt)
-    T_ODE, g_ODE, a_ODE = timestep_coup(t, experiments, F_all, L, dt, C)
-    utils_general.plot_box_model(T_ODE, t, experiments, regions, colors, soln_type='Noiseless ODE Solutions', coupled=True)
+    T_ODE, g_ODE, a_ODE = timestep_uncoup(t, experiments, regions, F_all, lam, C, dt)
+    #T_ODE, g_ODE, a_ODE = timestep_coup(t, experiments, F_all, L, dt, C)
+    utils_general.plot_box_model(T_ODE, t, experiments, regions, colors, soln_type='Noiseless ODE Solutions')
 
   return T_ODE, g_ODE, a_ODE
 
@@ -89,7 +89,7 @@ def method_1_direct(T_ODE, modal=True):
                                       colors, soln_type='Method 1 Solutions',
                                       modal=modal, T_modal=T_modal)
 
-  return T_raw, T_modal, L2_raw, L2_modal
+  return T_raw, T_modal, L2_raw, L2_modal, G
 
 def method_2_L(T_ODE, g_ODE, a_ODE, modal=True):
 

@@ -4,9 +4,9 @@ from scipy.special import legendre
 from tqdm import tqdm
 import warnings
 import math
-import utils_general
+import emulator_utils
 
-colors = utils_general.brewer2_light
+colors = emulator_utils.brewer2_light
 labels = ['High Lat. Ocean','Land','Low Lat. Ocean']
 
 plt.rcParams['figure.figsize'] = [12, 4]
@@ -61,6 +61,18 @@ def SolverBudykoSellers(const, grid, params, init, time):
     reg_D = []
   else:
     reg_D = params['reg_D']
+
+  # Check if noise parameter exists, otherwise ignore it
+  if 'xi' not in params:
+    xi = 0
+  else:
+    xi = params['xi']
+
+  # Check if perturbation exists, otherwise ignore it
+  if 'delta' not in params:
+    delta = 0
+  else:
+    delta = params['delta']
 
   avg_D = (final_D + initial_D)/2
   diff_D2 = (final_D - initial_D)/2
@@ -142,6 +154,20 @@ def SolverBudykoSellers(const, grid, params, init, time):
     RFSW = lambda t: 0
     RFLW = lambda t: amp * np.exp(t / t_star)
 
+  elif force_flag == 2:
+    # Gaussian forcing case (longwave only)
+    a = params['a'] # [W m-2]
+    b = params['b'] # [years]
+    c = params['c'] # [growth rate]
+
+    RFSW = lambda t: 0
+    RFLW = lambda t: a * np.exp(-np.power(t - b,2)/(2 * c**2))
+
+  elif force_flag == 3:
+    # Impulse forcing case (longwave only)
+    RFSW = lambda t: 0
+    RFLW = lambda t: 1 if t <= 1 else 0
+
   ## Time integration
   # Initialize main variables
   T_new = Tinit
@@ -151,9 +177,11 @@ def SolverBudykoSellers(const, grid, params, init, time):
   ASR_ts = np.full((NL, NS), np.nan)
   OLR_ts = np.full((NL, NS), np.nan)
   HDYN_ts = np.full((NL, NS), np.nan)
-  VDYN_ts = np.full((NL, NS), np.nan)
+  #VDYN_ts = np.full((NL, NS), np.nan)
+  VDYN_ts = np.full((NL, NZ, NS), np.nan)
   TANM_ts = np.full((1, NS), np.nan)
   D_ts = np.full((NL + 1, NS), np.nan)
+  forcing_ts = np.full((1, NS), np.nan)
 
   idxsave = 0
   stag_D = np.ones(NL + 1) * initial_D
@@ -177,9 +205,12 @@ def SolverBudykoSellers(const, grid, params, init, time):
   VDYN = np.zeros((NL, NZ))
 
   # Main integration loop
-  for n in tqdm(range(1,NT)):
+  for n in tqdm(range(1,NT), disable=True):
     # Set the current temperature
     T_arr = T_new
+
+    if n == 1:
+      noise = np.random.normal(loc=0.0, scale=xi)
 
     ######################################
     ## 1. Calculate terms for first box ##
@@ -189,7 +220,11 @@ def SolverBudykoSellers(const, grid, params, init, time):
     ASR = ASR_func(T_arr[:,0].T) - RFSW(tc_years)
 
     # Calculate OLR
-    OLR = (A - RFLW(tc_years) + B*T_arr[:,0].T)
+    if tc_years <= 1:
+      RFLW_n = RFLW(tc_years) + noise + delta
+    else:
+      RFLW_n = RFLW(tc_years) + noise
+    OLR = (A - RFLW_n + B*T_arr[:,0].T)
 
     # Calculate stag_D depending on current temperatures
     gl_avg = np.sum(T_arr[:,0].T*weight_factor)
@@ -225,8 +260,6 @@ def SolverBudykoSellers(const, grid, params, init, time):
     ## 3. Save off the timeseries ##
     ################################
 
-    # Update the clock
-    tc_years = tc_years + dt/365/24/3600
     if n % DS == 0 or n == 1:
       # Save timeseries
       T_ts[:,:,idxsave] = T_arr
@@ -234,9 +267,15 @@ def SolverBudykoSellers(const, grid, params, init, time):
       OLR_ts[:,idxsave] = OLR
       HDYN_ts[:,idxsave] = HDYN
       D_ts[:,idxsave] = stag_D.T
-      VDYN_ts[:,idxsave] = VDYN[0]
+      #VDYN_ts[:,idxsave] = VDYN[0]
+      VDYN_ts[:,:,idxsave] = VDYN[0]
       TANM_ts[0,idxsave] = dgl_avg
+      forcing_ts[:,idxsave] = RFLW_n
       idxsave += 1
+      noise = np.random.normal(loc=0.0, scale=xi)
+
+    # Update the clock
+    tc_years = tc_years + dt/365/24/3600
 
   # Prepare out dict
   out['H'] = (-2 * np.pi * earth_radius**2 * hhfx) / 1e15 # [PW]
@@ -263,13 +302,14 @@ def SolverBudykoSellers(const, grid, params, init, time):
   out['TANM_ts'] = TANM_ts
   out['stag_z'] = stag_z
   out['NZ'] = NZ
+  out['forcing_ts'] = forcing_ts
 
   if out['diseq'] > 1e-3:
     warnings.warn('Simulation has not reached equilibirum (diseq > 1e-3 W m-2)')
 
   return out
 
-def Run_Budyko_Sellers(exp_flag=0):
+def Run_Budyko_Sellers(exp_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0):
   # Initialize dictionaries
   grid, params, init, const, time = {}, {}, {}, {}, {}
 
@@ -278,67 +318,91 @@ def Run_Budyko_Sellers(exp_flag=0):
   const['rho_w'] = 1e3 # Water density [kg m-3]
   const['cp_w'] = 4e3 # Water specific heat capacity [J kg-1 K-1]
 
-  #grid['stag_lats'] = np.arange(-90, 91, 36)              # Vector of staggered latitudes [degrees]
-  grid['stag_lats'] = np.array([-90,90])             # Vector of staggered latitudes [degrees]
-  #grid['dz_slabs'] = np.array([1500, 10, 150, 10, 1500])  # Water slabs thickness [m]
-  #grid['dz_slabs'] = np.array([1500, 10])  # Water slabs thickness [m]
-  grid['dz_slabs'] = np.array([])
-
-  params['ASRf'] = 0                                      # Select shortwave radiation scheme [Daily insolation/No SW/linear]
-  params['A'] = 0                                         # Intercept in OLR calculation, used for climatology [W m-2]
-
-  init['T0'] = 0                                          # Initial temperature [K]
-
-  params['D'] = 0                                         # Horizontal diffusivity [W m-2 K-1]
-  #params['B'] = np.array([0.67, 0.86, 2.0, 0.86, 0.67])   # Feedback parameters [W m-2 K-1]
-  #params['B'] = np.array([0.67, 0.86])   # Feedback parameters [W m-2 K-1]
-  params['B'] = np.array([1.58])
-  #params['K'] = 0                                         # Vertical diffusivity [W m-2 K-1]
-  params['K'] = 0.76
-
-  time['int_yrs'] = 250                                   # Integration time [years]
-  time['save_f'] = 365                                    # Save every time.save_f [days]
-  time['dt'] = 3600 * 6                                   # Time step [seconds]
-
-  grid['NL'] = len(grid['stag_lats']) - 1                                         # Number of regions
+  # Set grid parameters
+  if vert_diff_flag == 0: # Regular grid
+    grid['stag_lats'] = np.arange(-90, 91, 36)              # Vector of staggered latitudes [degrees]
+    grid['dz_slabs'] = np.array([1500, 10, 150, 10, 1500])  # Water slabs thickness [m]
+  elif vert_diff_flag == 1: # Grid with vertical diffusion
+    grid['stag_lats'] = np.array([-90,90])
+    grid['dz_slabs'] = np.array([])
   grid['lats'] = 0.5 * (grid['stag_lats'][1:] + grid['stag_lats'][0:-1])          # Unstaggered latitudes
+  grid['NL'] = len(grid['stag_lats']) - 1                                         # Number of regions
 
-  params['stag_z'] = np.hstack([                                                  # Water box thicknesses
-      np.zeros((len(grid['dz_slabs']), 1)),
-      np.array(grid['dz_slabs']).reshape(-1, 1)
-  ])
+  # Set ODE parameters
+  if vert_diff_flag == 0: # Regular grid
+    params['ASRf'] = 0                                      # Select shortwave radiation scheme [Daily insolation/No SW/linear]
+    params['A'] = 0                                         # Intercept in OLR calculation, used for climatology [W m-2]
+    params['B'] = np.array([0.67, 0.86, 2.0, 0.86, 0.67])   # Feedback parameters [W m-2 K-1]
+    params['K'] = 0                                         # Vertical diffusivity [W m-2 K-1]
+    params['stag_z'] = np.hstack([                                                  # Water box thicknesses
+        np.zeros((len(grid['dz_slabs']), 1)),
+        np.array(grid['dz_slabs']).reshape(-1, 1)
+    ])
 
+  elif vert_diff_flag == 1: # Grid with vertical diffusion
+    params['ASRf'] = 0                                      # Select shortwave radiation scheme [Daily insolation/No SW/linear]
+    params['A'] = 0                                         # Intercept in OLR calculation, used for climatology [W m-2]
+    params['B'] = 0.86   # Feedback parameters [W m-2 K-1]
+    params['K'] = 0.7                                        # Vertical diffusivity [W m-2 K-1]
+    params['stag_z'] = np.array([[0.0, 55.2105, 709.7600]])
+
+  # Initialize temperature
+  init['T0'] = 0                                          # Initial temperature [K]
+  if vert_diff_flag == 0:
+    init['T'] = np.ones((grid['NL'], 1)) * init['T0']                               # Initial temperature
+  elif vert_diff_flag == 1:
+    init['T'] = np.array([[0.,0.]])
+
+  # Set time parameters
+  time['int_yrs'] = 250                                                            # Integration time [years]
+  time['save_f'] = 365                                                            # Save every time.save_f [days]
+  time['dt'] = 3600 * 6 * 16                                                           # Time step [seconds]
   time['NT'] = int(round((time['int_yrs'] * 3600 * 24 * 365.24) / time['dt']))    # Number of time steps
   time['DS'] = int(round(time['save_f'] * 3600 * 24 / time['dt']))                # Save every time['DS']
   time['NS'] = math.floor(time['NT'] / time['DS']) + 1                            # Number of save times
   time['tvec_save'] = np.arange(0, time['save_f'] * time['NS'], time['save_f'])   # Vector of saved time steps
 
-  init['T'] = np.ones((grid['NL'], 1)) * init['T0']                               # Initial temperature
+  # Set experimental parameters
+  ## Uncoupled
+  if diff_flag == 0:
+    params['D']= 0 # Horizontal diffusivity [W m-2 K-1]
 
+  ## Coupled
+  elif diff_flag == 1:
+    params['D'] = 0.55 # Horizontal diffusivity [W m-2 K-1]
+
+  ## Abrupt 2xCO2
   if exp_flag == 0:
-    params['reff_lw']     = 3.7                                 # Longwave forcing [W m-2]
+    params['force_flag']  = 0                                   # Select which type of forcing
+    params['reff_lw']     = 3.7 # 7.0 #WRONG                                 # Longwave forcing [W m-2]
     params['reff_sw']     = 0                                   # Shortwave forcing [W m-2]
-    params['force_flag']  = 0                                   # Select which type of forcing [Constant, Exponential, Other]
 
+  ## High emissions
   elif exp_flag == 1:
     params['force_flag']  = 1
     params['RF_end']      = 8.5 # [W m-2]
     params['RF_init']     = 0.0 # [W m-2]
     params['t_star']      = 50  # [years]
 
+  ## Overshoot
   elif exp_flag == 2:
-    params['reff_lw']     = 3.7                                 # Longwave forcing [W m-2]
-    params['reff_sw']     = 0                                   # Shortwave forcing [W m-2]
-    params['force_flag']  = 0                                   # Select which type of forcing [Constant, Exponential, Other]
-    params['D']           = 0.55
+    params['force_flag']  = 2
+    params['a']           = 4     # [W m-2]
+    params['b']           = 200   # [years]
+    params['c']           = 42.47 # [growth rate]
 
+  ## Impulse
   elif exp_flag == 3:
-    params['reff_lw'] = 8.5
-    params['reff_sw'] = 0
-    params['force_flag']  = 0                                   # Select which type of forcing [Constant, Exponential, Other]
+    params['force_flag']  = 3
 
   else:
     raise ValueError('Error, experiment not recognized.')
+
+  if xi != 0:
+    params['xi'] = xi
+
+  if delta != 0:
+    params['delta'] = delta
 
   return SolverBudykoSellers(const, grid, params, init, time)
 
