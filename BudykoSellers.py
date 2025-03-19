@@ -74,6 +74,9 @@ def SolverBudykoSellers(const, grid, params, init, time):
   else:
     delta = params['delta']
 
+  if 'noise_ts' in params:
+    noise_ts = params['noise_ts']
+
   avg_D = (final_D + initial_D)/2
   diff_D2 = (final_D - initial_D)/2
 
@@ -183,6 +186,9 @@ def SolverBudykoSellers(const, grid, params, init, time):
   D_ts = np.full((NL + 1, NS), np.nan)
   forcing_ts = np.full((1, NS), np.nan)
 
+  if 'noise_ts' not in params:
+    noise_ts = np.full((1, NS), np.nan)
+
   idxsave = 0
   stag_D = np.ones(NL + 1) * initial_D
 
@@ -209,8 +215,10 @@ def SolverBudykoSellers(const, grid, params, init, time):
     # Set the current temperature
     T_arr = T_new
 
-    if n == 1:
+    if n == 1 and 'noise_ts' not in params:
       noise = np.random.normal(loc=0.0, scale=xi)
+    elif n == 1 and 'noise_ts' in params:
+      noise = noise_ts[0,idxsave]
 
     ######################################
     ## 1. Calculate terms for first box ##
@@ -235,7 +243,7 @@ def SolverBudykoSellers(const, grid, params, init, time):
     for i in range(1, NL):
       hhfx[i] = stag_D[i] * np.cos(stag_lats[i] * np.pi/180) * (T_arr[i,0] - T_arr[i - 1,0]) / ((lats[i] - lats[i - 1]) * np.pi/180)
 
-    # Calculate dynmic heating rate
+    # Calculate dynamic heating rate
     for i in range(0, NL):
       HDYN[i] = 1/np.cos(lats[i] * np.pi/180) * (hhfx[i + 1] - hhfx[i]) / ((stag_lats[i + 1] - stag_lats[i]) * np.pi/180)
 
@@ -267,12 +275,15 @@ def SolverBudykoSellers(const, grid, params, init, time):
       OLR_ts[:,idxsave] = OLR
       HDYN_ts[:,idxsave] = HDYN
       D_ts[:,idxsave] = stag_D.T
-      #VDYN_ts[:,idxsave] = VDYN[0]
       VDYN_ts[:,:,idxsave] = VDYN[0]
       TANM_ts[0,idxsave] = dgl_avg
       forcing_ts[:,idxsave] = RFLW_n
+      if 'noise_ts' not in params:
+        noise_ts[0,idxsave] = noise
+        noise = np.random.normal(loc=0.0, scale=xi)
+      else:
+        noise = noise_ts[0,idxsave]
       idxsave += 1
-      noise = np.random.normal(loc=0.0, scale=xi)
 
     # Update the clock
     tc_years = tc_years + dt/365/24/3600
@@ -303,13 +314,14 @@ def SolverBudykoSellers(const, grid, params, init, time):
   out['stag_z'] = stag_z
   out['NZ'] = NZ
   out['forcing_ts'] = forcing_ts
+  out['noise_ts'] = noise_ts
 
   if out['diseq'] > 1e-3:
     warnings.warn('Simulation has not reached equilibirum (diseq > 1e-3 W m-2)')
 
   return out
 
-def Run_Budyko_Sellers(exp_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0):
+def Run_Budyko_Sellers(exp_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0, n_boxes=3, noise_ts=None):
   # Initialize dictionaries
   grid, params, init, const, time = {}, {}, {}, {}, {}
 
@@ -320,8 +332,12 @@ def Run_Budyko_Sellers(exp_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0)
 
   # Set grid parameters
   if vert_diff_flag == 0: # Regular grid
-    grid['stag_lats'] = np.arange(-90, 91, 36)              # Vector of staggered latitudes [degrees]
-    grid['dz_slabs'] = np.array([1500, 10, 150, 10, 1500])  # Water slabs thickness [m]
+    if n_boxes == 5:
+      grid['stag_lats'] = np.arange(-90, 91, 36)              # Vector of staggered latitudes [degrees]
+      grid['dz_slabs'] = np.array([1500, 10, 150, 10, 1500])  # Water slabs thickness [m]
+    elif n_boxes == 3:
+      grid['stag_lats'] = np.arange(-90, 91, 60)              # Vector of staggered latitudes [degrees]
+      grid['dz_slabs'] = np.array([1500, 10, 150])  # Water slabs thickness [m]
   elif vert_diff_flag == 1: # Grid with vertical diffusion
     grid['stag_lats'] = np.array([-90,90])
     grid['dz_slabs'] = np.array([])
@@ -332,7 +348,10 @@ def Run_Budyko_Sellers(exp_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0)
   if vert_diff_flag == 0: # Regular grid
     params['ASRf'] = 0                                      # Select shortwave radiation scheme [Daily insolation/No SW/linear]
     params['A'] = 0                                         # Intercept in OLR calculation, used for climatology [W m-2]
-    params['B'] = np.array([0.67, 0.86, 2.0, 0.86, 0.67])   # Feedback parameters [W m-2 K-1]
+    if n_boxes == 5:
+      params['B'] = np.array([0.67, 0.86, 2.0, 0.86, 0.67])   # Feedback parameters [W m-2 K-1]
+    elif n_boxes == 3:
+      params['B'] = np.array([0.67, 0.86, 2.0])   # Feedback parameters [W m-2 K-1]
     params['K'] = 0                                         # Vertical diffusivity [W m-2 K-1]
     params['stag_z'] = np.hstack([                                                  # Water box thicknesses
         np.zeros((len(grid['dz_slabs']), 1)),
@@ -374,7 +393,7 @@ def Run_Budyko_Sellers(exp_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0)
   ## Abrupt 2xCO2
   if exp_flag == 0:
     params['force_flag']  = 0                                   # Select which type of forcing
-    params['reff_lw']     = 3.7 # 7.0 #WRONG                                 # Longwave forcing [W m-2]
+    params['reff_lw']     = 3.7                                 # Longwave forcing [W m-2]
     params['reff_sw']     = 0                                   # Shortwave forcing [W m-2]
 
   ## High emissions
@@ -396,7 +415,7 @@ def Run_Budyko_Sellers(exp_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0)
     params['force_flag']  = 3
 
   else:
-    raise ValueError('Error, experiment not recognized.')
+    raise ValueError(f'Error, experiment {exp_flag} not recognized.')
 
   if xi != 0:
     params['xi'] = xi
@@ -404,13 +423,16 @@ def Run_Budyko_Sellers(exp_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0)
   if delta != 0:
     params['delta'] = delta
 
+  if noise_ts is not None:
+    params['noise_ts'] = noise_ts
+
   return SolverBudykoSellers(const, grid, params, init, time)
 
 def plot_BudykoSellers(out):
 
   fig, ax = plt.subplots(constrained_layout=True)
   for i in range(len(out['T_ts'])):
-    ax.plot(np.squeeze(out['T_ts']).T[:,i], c=colors(i), label=labels[i], lw=2)
+    ax.plot(np.squeeze(out['T_ts']).T[:,i], c=colors(i), lw=2)#, label=labels[i], lw=2)
 
   ax.set_xlabel('Year')
   ax.set_ylabel('Temperature')

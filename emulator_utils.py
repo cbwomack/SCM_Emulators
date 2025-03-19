@@ -99,9 +99,10 @@ def method_2b_FDT(n_ensemble, n_boxes, n_steps, xi, delta, exp_flag=0, diff_flag
     # Run unperturbed scenario
     full_output_unperturbed = BudykoSellers.Run_Budyko_Sellers(exp_flag=exp_flag, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi)
     w[n,:,:] = np.squeeze(full_output_unperturbed['T_ts'])[0:n_boxes,:]
+    noise_ts = full_output_unperturbed['noise_ts']
 
     # Run perturbed scenario
-    full_output_perturbed = BudykoSellers.Run_Budyko_Sellers(exp_flag=exp_flag, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi, delta=delta)
+    full_output_perturbed = BudykoSellers.Run_Budyko_Sellers(exp_flag=exp_flag, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi, delta=delta, noise_ts=noise_ts)
     w_delta[n,:,:] = np.squeeze(full_output_perturbed['T_ts'])[0:n_boxes,:]
 
   # Take ensemble average divided by magnitude of perturbation
@@ -109,10 +110,17 @@ def method_2b_FDT(n_ensemble, n_boxes, n_steps, xi, delta, exp_flag=0, diff_flag
 
   return G_FDT
 
-def method_3a_deconvolve(w, F, dt):
+def method_3a_deconvolve(w, F, dt, regularize=False):
   # Calculate G using deconvolution
   F_toep = sparse.csr_matrix(toeplitz(F[0,:], np.zeros_like(F[0,:])))
-  G_deconv = spsolve_triangular(F_toep, w.T, lower=True)
+
+  if regularize:
+    sig2, lam2 = get_regularization(w, F)
+    alpha = sig2 / lam2  # Ridge penalty
+    G_deconv = np.linalg.solve(F_toep.T @ F_toep + alpha * np.eye(F.shape[1]), F_toep.T @ w.T)
+
+  else:
+    G_deconv = spsolve_triangular(F_toep, w.T, lower=True)
 
   return G_deconv.T/dt
 
@@ -122,12 +130,19 @@ def method_3b_Edeconvolve(w, F, dict_w, dict_F):
 
   return G_Edeconv
 """
-def method_4a_fit(w, F, t, dt, n_modes, n_boxes, B):
+def method_4a_fit(w, F, t, dt, n_modes, n_boxes, B, A_DMD=None, B_DMD=None):
   # Calculate G using an exponential fit
   F_toep = sparse.csr_matrix(toeplitz(F[0,:], np.zeros_like(F[0,:])))
 
-  initial_v = np.random.rand(n_modes * n_boxes)  # Flattened eigenvector
-  initial_lam = np.random.rand(n_modes)      # Eigenvalues
+  if A_DMD is not None:
+    eigs, vecs = np.linalg.eig(A_DMD)
+    initial_v = -vecs[0:n_modes].flatten()
+    initial_lam = -eigs[0:n_modes]
+
+  else:
+    initial_v = np.random.rand(n_modes * n_boxes)  # Flattened eigenvector
+    initial_lam = np.random.rand(n_modes)      # Eigenvalues
+
   initial_params = np.concatenate([initial_v, initial_lam])  # Combine into a single parameter vector
   bounds = [(None, None)] * (n_modes * n_boxes) + [(None, 0)] * n_modes
 
@@ -190,6 +205,10 @@ def create_emulator(op_type, w, F, t=None, dt=None, n_boxes=None, w_dict=None, F
 
   elif op_type == 'fit':
     operator = method_4a_fit(w, F, t, dt, n_modes, n_boxes, B)
+
+  elif op_type == 'fit_DMD':
+    A_DMD, B_DMD = method_1a_DMD(w, F)
+    operator = method_4a_fit(w, F, t, dt, n_modes, n_boxes, B, A_DMD, B_DMD)
 
   else:
     raise ValueError('Operator type {op_type} not recognized.')
@@ -260,7 +279,7 @@ def estimate_w(F, operator, op_type, dt=None, w0=None, n_steps=None, n_boxes=Non
   elif op_type == 'EDMD':
     A_EDMD, B_EDMD = operator
     w_est = emulate_EDMD(F, A_EDMD, B_EDMD, w0, n_steps, n_boxes, dict_w, dict_F)
-  elif op_type == 'deconvolve' or op_type == 'direct' or op_type == 'FDT' or op_type == 'fit':
+  elif op_type == 'deconvolve' or op_type == 'direct' or op_type == 'FDT' or op_type == 'fit' or op_type == 'fit_DMD':
     w_est = emulate_response(F, operator, dt)
   else:
     raise ValueError('Operator type {op_type} not recognized.')
@@ -312,12 +331,12 @@ def emulate_experiments(op_type, experiments=None, outputs=None, forcings=None, 
 ## Ensemble Helper Functions ##
 ###############################
 
-def evaluate_ensemble(experiments, n_ensemble, n_choices, forcings_ensemble, w_ensemble, op_type, op_true,
-                      t=None, dt=None, n_boxes=None, w_dict=None, F_dict=None, n_modes=None, diff_flag=0, vert_diff_flag=0, B=None, xi=0):
+def evaluate_ensemble(experiments, n_ensemble, n_choices, forcings_ensemble, w_ensemble, op_type, op_true, w0=None, n_steps=None,
+                      t=None, dt=None, n_boxes=None, w_dict=None, F_dict=None, n_modes=None, diff_flag=0, vert_diff_flag=0, B=None, xi=0, delta=0):
 
-  operator_ensemble, operator_L2_avg = {}, {}
+  operator_ensemble, operator_L2_avg, w_pred_L2 = {}, {}, {}
 
-  # Separate treament for direct diagnosis of response function
+  # Separate treament for direct diagnosis of response function (does this even make sense in this context?)
   if op_type == 'direct':
     operator_ensemble, operator_L2_avg = [], []
 
@@ -344,13 +363,20 @@ def evaluate_ensemble(experiments, n_ensemble, n_choices, forcings_ensemble, w_e
 
     return operator_ensemble, operator_L2_avg
 
-  for exp in experiments:
-    forcing_w = list(zip(forcings_ensemble[exp],w_ensemble[exp]))
-    operator_ensemble[exp], operator_L2_avg[exp] = [], []
+  for exp_flag, exp1 in enumerate(experiments):
+    forcing_w = list(zip(forcings_ensemble[exp1],w_ensemble[exp1]))
+    operator_ensemble[exp1], operator_L2_avg[exp1], w_pred_L2[exp1] = [], [], {}
+
+    # Setup data storage
+    for exp2 in experiments:
+      w_pred_L2[exp1][exp2] = []
 
     # Iterate over ensemble subsets of length n
     for n in range(1,n_ensemble + 1):
-      operator_subset, operator_L2_subset = [], []
+      operator_subset, operator_L2_subset, w_pred_L2_subset = [], [], {}
+
+      for exp2 in experiments:
+        w_pred_L2_subset[exp2] = []
 
       # Repeatedly select subsets n_choices times
       for i in range(n_choices):
@@ -369,27 +395,40 @@ def evaluate_ensemble(experiments, n_ensemble, n_choices, forcings_ensemble, w_e
           A_EDMD, B_EDMD = method_1b_EDMD(mean_w, mean_forcing, w_dict, F_dict)
           operator_temp = (A_EDMD, B_EDMD)
         elif op_type == 'deconvolve':
-          operator_temp = method_3a_deconvolve(mean_w, mean_forcing, dt)
+          operator_temp = method_3a_deconvolve(mean_w, mean_forcing, dt, regularize=True)
         elif op_type == 'fit':
           operator_temp = method_4a_fit(mean_w, mean_forcing, t, dt, n_modes, n_boxes, B)
+        elif op_type == 'FDT':
+          operator_temp = method_2b_FDT(n, n_boxes, n_steps, xi, delta, exp_flag, diff_flag, vert_diff_flag)
 
         operator_subset.append(operator_temp)
 
         # Calculate error between ensemble and ground-truth operator
-        operator_L2_subset.append(np.linalg.norm(np.array(operator_temp) - np.array(op_true[exp])))
+        operator_L2_subset.append(np.linalg.norm(np.array(operator_temp) - np.array(op_true[exp1])))
+
+        # Emulate output and calculate L2 to ground truth
+        for exp2 in experiments:
+          forcing_true = np.mean(forcings_ensemble[exp2], axis=0)
+          w_true = np.mean(w_ensemble[exp2], axis=0)
+
+          w_pred_temp = estimate_w(forcing_true, operator_temp, op_type, dt, w0, n_steps, n_boxes, w_dict, F_dict)
+          w_pred_L2_subset[exp2].append(calc_L2(w_true, w_pred_temp))
 
       # Calculate the average operator and error across the number of choices
       if op_type == 'DMD' or op_type == 'EDMD':
         A, B = zip(*operator_subset)
         A_mean, B_mean = np.mean(np.stack(A, axis=0), axis=0), np.mean(np.stack(B, axis=0), axis=0)
-        operator_ensemble[exp].append((A_mean, B_mean))
+        operator_ensemble[exp1].append((A_mean, B_mean))
       elif op_type == 'deconvolve' or op_type == 'fit':
         R_mean = np.mean(np.stack(operator_subset, axis=0), axis=0)
-        operator_ensemble[exp].append((R_mean))
+        operator_ensemble[exp1].append((R_mean))
 
-      operator_L2_avg[exp].append(np.mean(operator_L2_subset))
+      operator_L2_avg[exp1].append(np.mean(operator_L2_subset))
 
-  return operator_ensemble, operator_L2_avg
+      for exp2 in experiments:
+        w_pred_L2[exp1][exp2].append(np.mean(w_pred_L2_subset[exp2]))
+
+  return operator_ensemble, operator_L2_avg, w_pred_L2
 
 ##############################
 ## General Helper Functions ##
@@ -400,6 +439,34 @@ def L_to_G():
 
   return
 """
+
+def get_regularization(w, F):
+  init_params = np.random.rand(2)  # Start with log(1), log(1)
+
+  F_toep = sparse.csr_matrix(toeplitz(F[0,:], np.zeros_like(F[0,:])))
+
+  res = minimize(fit_opt_hyper,
+                 init_params,
+                 args=(w, F_toep),
+                 method='L-BFGS-B')
+
+  return res.x
+
+def fit_opt_hyper(params, w, F_toep):
+  sig2, lam2 = params
+
+  n_x, n_t = w.shape
+  Sig = sig2*np.eye(n_t) + lam2*(F_toep @ F_toep.T)
+
+  sign, logdet_Sig = np.linalg.slogdet(Sig)
+  if sign <= 0:
+    return np.inf  # Avoid invalid log-determinant
+
+  Sig_inv_w = np.linalg.solve(Sig, w.T)
+  quadratic_term = np.sum(w * Sig_inv_w.T)
+  log_evidence_value = -0.5 * (n_x * logdet_Sig + quadratic_term)
+
+  return -log_evidence_value  # Negate for minimization
 
 def plot_true_pred(T_true, T_pred, experiments):
   n_exp = len(experiments)
