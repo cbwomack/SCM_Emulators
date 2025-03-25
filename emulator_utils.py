@@ -6,6 +6,8 @@ from scipy import sparse
 from scipy.linalg import toeplitz
 from scipy.sparse.linalg import spsolve_triangular
 from scipy.optimize import minimize
+from scipy.special import eval_hermite
+from scipy.integrate import solve_ivp
 import random
 import BudykoSellers
 
@@ -50,9 +52,75 @@ def generate_forcing(exp, t, t_end, t_star, n_boxes):
 
   return F
 
+######################################
+## Functions for Lorenz-like System ##
+######################################
+
+def Lorenz_rho(t, omega, offset=50, exp=0):
+  # Calculate rho for Lorenz-like system
+  if exp == 0:
+    return 60 + 30*np.tanh(omega*(t - 50))
+  elif exp == 1:
+    return 60 + 30*np.sin(omega*t)
+  elif exp == 2:
+    return (0.25*np.exp(-t/5) + 0.75*np.exp(-t/0.05))*np.cos(2*np.pi*t/0.57)
+  else:
+    raise ValueError('Error, unrecognized experiment.')
+
+def Lorenz_ddt(t, xv_flat, alpha, beta, sigma, omega, exp=0):
+  xv = xv_flat.reshape(-1, 3)
+
+  rho = Lorenz_rho(t, omega, exp)
+  x, y, z = xv[:,0], xv[:,1], xv[:,2]
+  dx = sigma*(y - x)
+  dy = -(x + alpha*np.pow(x,3)) + rho*x - y
+  dz = x*y - beta*z
+
+  ddt_flat = np.column_stack([dx, dy, dz]).ravel()
+
+  return ddt_flat
+
+def Lorenz_integrate(t_max, dt, N, r, alpha, beta, sigma, omega, exp=0):
+
+  if N < 50:
+    n_snap = N
+  else:
+    n_snap = 50
+
+  while t < t_max:
+    # Single-step ODE from t to t+dt using solve_ivp with method=RK45
+    sol = solve_ivp(Lorenz_ddt, [t, t + dt], xv.flatten(),
+                    method='RK45', t_eval=[t + dt],
+                    args=(alpha, beta, sigma, omega, exp))
+
+    # Extract the final state, reshape it back to (N,3)
+    xv = sol.y[:, -1].reshape((N, 3))
+    t += dt
+
+    # Add the Gaussian noise
+    xv += r * np.random.randn(*xv.shape)
+
+    # Store statistics
+    j += 1
+    xs[j]   = np.mean(xv[:, 0])
+    xr[:, j] = xv[:n_snap, 0]
+    xm[:, j] = np.max(xv, axis=0)
+    xstd[j]  = np.std(xv[:, 0])
+
+  return
+
 #####################################
 ## Functions to Diagnose Emulators ##
 #####################################
+
+def method_0_PS(w):
+  nx = len(w)
+  global_mean = np.mean(w,axis=0).reshape(-1, 1)
+  XTX_inv = np.linalg.inv(global_mean.T @ global_mean)  # shape (1, 1)
+  XTY = global_mean.T @ w.T  # shape (1, nx)
+  pattern = (XTX_inv @ XTY).reshape(1, nx)  # shape (1, nx)
+
+  return pattern
 
 def method_1a_DMD(w, F):
   # Calculate L using DMD
@@ -210,14 +278,24 @@ def create_emulator(op_type, w, F, t=None, dt=None, n_boxes=None, w_dict=None, F
     A_DMD, B_DMD = method_1a_DMD(w, F)
     operator = method_4a_fit(w, F, t, dt, n_modes, n_boxes, B, A_DMD, B_DMD)
 
+  elif op_type == 'PS':
+    operator = method_0_PS(w)
+
   else:
-    raise ValueError('Operator type {op_type} not recognized.')
+    raise ValueError(f'Operator type {op_type} not recognized.')
 
   return operator
 
 ########################
 ## Emulate a Scenario ##
 ########################
+
+def emulate_PS(w, pattern):
+  # Emulate a scenario with pattern scaling
+  global_mean = np.mean(w, axis=0).reshape(1,-1)
+  w_pred = pattern.T @ global_mean
+
+  return w_pred
 
 def emulate_DMD(F, A_DMD, B_DMD, w0, n_steps):
   # Emulate a scenario with DMD
@@ -252,11 +330,11 @@ def emulate_EDMD(F, A_EDMD, B_EDMD, w0, n_steps, n_boxes, dict_w, dict_F):
 
   for k in range(1, n_steps):
     # Discrete-time update in lifted space
-
     phi_pred[:, k] = A_EDMD @ phi_pred[:, k-1] + B_EDMD @ Phi_F[:,k-1]
 
-    # Reconstruct the state from the first 3 dimensions
-    w_rec[:, k] = phi_pred[1:n_boxes+1, k]  # Depends on how dictionary is defined
+    # Reconstruct the state from the first n_boxes dimensions
+    #w_rec[:, k] = phi_pred[1:n_boxes+1, k]  # Depends on how dictionary is defined
+    w_rec[:, k] = phi_pred[0:n_boxes, k]  # Depends on how dictionary is defined
 
   return w_rec
 
@@ -269,7 +347,7 @@ def emulate_response(F, G, dt):
 ## Functions to Evaluate Emulators ##
 #####################################
 
-def estimate_w(F, operator, op_type, dt=None, w0=None, n_steps=None, n_boxes=None, dict_w=None, dict_F=None):
+def estimate_w(F, operator, op_type, dt=None, w0=None, n_steps=None, n_boxes=None, dict_w=None, dict_F=None, w=None):
   # Estimate variable of interest given an initial
   # condition and forcing
 
@@ -281,51 +359,74 @@ def estimate_w(F, operator, op_type, dt=None, w0=None, n_steps=None, n_boxes=Non
     w_est = emulate_EDMD(F, A_EDMD, B_EDMD, w0, n_steps, n_boxes, dict_w, dict_F)
   elif op_type == 'deconvolve' or op_type == 'direct' or op_type == 'FDT' or op_type == 'fit' or op_type == 'fit_DMD':
     w_est = emulate_response(F, operator, dt)
+  elif op_type == 'PS':
+    pattern = operator
+    w_est = emulate_PS(w, pattern)
   else:
-    raise ValueError('Operator type {op_type} not recognized.')
+    raise ValueError(f'Operator type {op_type} not recognized.')
 
   return w_est
+
+
+#####################
+## Error Functions ##
+#####################
+def calc_RMSE(w_true, w_est):
+  return np.sqrt(np.mean((w_true - w_est)**2,axis=1))
+
+def calc_MAE(w_true, w_est):
+  return np.mean(np.abs(w_true - w_est),axis=1)
+
+def calc_Bias(w_true, w_est):
+  return np.mean(w_true - w_est,axis=1)
+
+def calc_MRE(w_true, w_est):
+  return 100*np.mean(np.divide(w_true - w_est, w_true),axis=1)
 
 def calc_L2(w_true, w_est):
   # Estimate L2 error between emulator and ground truth
   return np.linalg.norm(w_true - w_est)
 
-def emulate_experiments(op_type, experiments=None, outputs=None, forcings=None, w0=None, t=None, dt=None, n_steps=None, n_boxes=None,
+def calc_error_metrics(w_true, w_est):
+  return [calc_RMSE(w_true, w_est), calc_MAE(w_true, w_est), calc_Bias(w_true, w_est), calc_MRE(w_true, w_est)]
+
+def emulate_scenarios(op_type, scenarios=None, outputs=None, forcings=None, w0=None, t=None, dt=None, n_steps=None, n_boxes=None,
                         w_dict=None, F_dict=None, n_modes=None, verbose=True, diff_flag=0, vert_diff_flag=0, B=None, xi=0, n_ensemble=None, delta=0):
-  operator, w_pred, L2 = {}, {}, {}
+  operator, w_pred, error_metrics = {}, {}, {}
 
   if op_type == 'direct':
     operator = create_emulator(op_type, None, None, n_boxes=n_boxes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag)
     if verbose:
       print(f'Train: Impulse Forcing - L2 Error')
 
-    for exp2 in experiments:
-      F2 = forcings[exp2]
-      w_true_2 = outputs[exp2]
-      w_pred[exp2] = estimate_w(F2, operator, op_type, dt, w0, n_steps, n_boxes, w_dict, F_dict)
-      L2[exp2] = calc_L2(w_true_2, w_pred[exp2])
-      print(f'\tTest: {exp2} - {L2[exp2]}')
+    for scen2 in scenarios:
+      F2 = forcings[scen2]
+      w_true_2 = outputs[scen2]
+      w_pred[scen2] = estimate_w(F2, operator, op_type, dt, w0, n_steps, n_boxes, w_dict, F_dict)
+      error_metrics[scen2] = calc_error_metrics(w_true_2, w_pred[scen2])
+      #print(f'\tTest: {scen2} - {L2[scen2]}')
 
   else:
-    for exp1 in experiments:
-      w_pred[exp1], L2[exp1] = {}, {}
+    for scen1 in scenarios:
+      w_pred[scen1], error_metrics[scen1] = {}, {}
       if verbose:
-        print(f'Train: {exp1} - L2 Error')
+        print(f'Train: {scen1} - L2 Error')
 
-      F1 = forcings[exp1]
-      w_true_1 = outputs[exp1]
-      operator[exp1] = create_emulator(op_type, w_true_1, F1, t=t, dt=dt, n_boxes=n_boxes, w_dict=w_dict,
+      F1 = forcings[scen1]
+      w_true_1 = outputs[scen1]
+      operator[scen1] = create_emulator(op_type, w_true_1, F1, t=t, dt=dt, n_boxes=n_boxes, w_dict=w_dict,
                                        F_dict=F_dict, n_modes=n_modes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag,
                                        B=B, xi=xi, n_ensemble=n_ensemble, delta=delta, n_steps=n_steps)
 
-      for exp2 in experiments:
-        F2 = forcings[exp2]
-        w_true_2 = outputs[exp2]
-        w_pred[exp1][exp2] = estimate_w(F2, operator[exp1], op_type, dt, w0, n_steps, n_boxes, w_dict, F_dict)
-        L2[exp1][exp2] = calc_L2(w_true_2, w_pred[exp1][exp2])
-        print(f'\tTest: {exp2} - {L2[exp1][exp2]}')
+      for scen2 in scenarios:
+        F2 = forcings[scen2]
+        w_true_2 = outputs[scen2]
+        w_pred[scen1][scen2] = estimate_w(F2, operator[scen1], op_type, dt, w0, n_steps, n_boxes, w_dict, F_dict, w=w_true_2)
+        error_metrics[scen1][scen2] = calc_error_metrics(w_true_2, w_pred[scen1][scen2])
+        if verbose:
+          print(f'\tTest: {scen2} - {error_metrics[scen1][scen2]}')
 
-  return operator, w_pred, L2
+  return operator, w_pred, error_metrics
 
 ###############################
 ## Ensemble Helper Functions ##
@@ -468,7 +569,7 @@ def fit_opt_hyper(params, w, F_toep):
 
   return -log_evidence_value  # Negate for minimization
 
-def plot_true_pred(T_true, T_pred, experiments):
+def plot_true_pred(T_true, T_pred, experiments, operator=None):
   n_exp = len(experiments)
   fig, ax = plt.subplots(n_exp, n_exp, figsize=(12,12), constrained_layout=True)
 
@@ -476,6 +577,10 @@ def plot_true_pred(T_true, T_pred, experiments):
     for j, exp2 in enumerate(experiments):
       T_true_temp, T_pred_temp = T_true[exp2].T, T_pred[exp1][exp2].T
       n_boxes = T_true_temp.shape[1]
+
+      if operator == 'PS':
+        ax[i,j].plot(np.mean(T_true_temp,axis=1), lw=2, c='k', alpha=0.75)
+
       for k in range(n_boxes):
         ax[i,j].plot(T_true_temp[:,k], lw=2, c=brewer2_light(k), alpha=0.5)
         ax[i,j].plot(T_pred_temp[:,k], lw=2, c=brewer2_light(k), ls='-.')
@@ -528,6 +633,11 @@ class Vector_Dict:
     Available methods:
     - 'polynomial': Polynomial basis up to 'degree'
     - 'rbf': Radial basis functions with 'centers' and 'gamma'
+    - 'hermite' : Hermite polynomial expansions
+
+    kwargs can include:
+    - degree (int): polynomial/Hermite degree
+    - centers (array), gamma (float): for RBF
     """
     self.method = method
     self.params = kwargs
@@ -546,6 +656,8 @@ class Vector_Dict:
       return self._rbf_dictionary(X,
                                   self.params.get("centers", None),
                                   self.params.get("gamma", 1.0))
+    elif self.method == "hermite":
+      return self._hermite_dictionary(X, self.params.get("degree", 2))
     else:
       raise ValueError(f"Unknown dictionary method: {self.method}")
 
@@ -604,6 +716,31 @@ class Vector_Dict:
       dist_sq = np.sum((X - center)**2, axis=1)
       Phi.append(np.exp(-gamma * dist_sq))
     return np.vstack(Phi).T
+
+  def _hermite_dictionary(self, X, degree=2):
+    """
+    For each feature x_i, compute Hermite polynomials H_d(x_i)
+    for d=0,...,degree. Then stack them all (no cross terms).
+    H_0(x)=1 acts like a constant term for each feature dimension.
+
+    The final shape will be (N_samples, (degree+1)*D).
+    """
+    N, D = X.shape
+    # We'll accumulate each basis as a row in 'Phi_list'
+    Phi_list = []
+    for d in range(1,degree + 1):
+      if d == 1:
+        # First, prepend non-lifted components
+        for i in range(D):
+          Phi_list.append(X[:, i])
+
+      # Now apply the Hermite polynomials
+      for i in range(D):
+        # Vectorize eval_hermite(d, x)
+        herm_vals = eval_hermite(d, X[:, i])
+        Phi_list.append(herm_vals)
+        # Stack all results => shape (n_basis, N) => transpose => (N, n_basis)
+    return np.vstack(Phi_list).T
 
 
 ###################

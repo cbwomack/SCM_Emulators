@@ -409,6 +409,7 @@ def Run_Budyko_Sellers(exp_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0,
     params['a']           = 4     # [W m-2]
     params['b']           = 200   # [years]
     params['c']           = 42.47 # [growth rate]
+    #params['c']           = 60 # [growth rate]
 
   ## Impulse
   elif exp_flag == 3:
