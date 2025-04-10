@@ -321,7 +321,7 @@ def SolverBudykoSellers(const, grid, params, init, time):
 
   return out
 
-def Run_Budyko_Sellers(exp_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0, n_boxes=3, noise_ts=None):
+def Run_Budyko_Sellers(scen_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0, n_boxes=3, noise_ts=None):
   # Initialize dictionaries
   grid, params, init, const, time = {}, {}, {}, {}, {}
 
@@ -381,7 +381,7 @@ def Run_Budyko_Sellers(exp_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0,
   time['NS'] = math.floor(time['NT'] / time['DS']) + 1                            # Number of save times
   time['tvec_save'] = np.arange(0, time['save_f'] * time['NS'], time['save_f'])   # Vector of saved time steps
 
-  # Set experimental parameters
+  # Set scenario parameters
   ## Uncoupled
   if diff_flag == 0:
     params['D']= 0 # Horizontal diffusivity [W m-2 K-1]
@@ -391,20 +391,20 @@ def Run_Budyko_Sellers(exp_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0,
     params['D'] = 0.55 # Horizontal diffusivity [W m-2 K-1]
 
   ## Abrupt 2xCO2
-  if exp_flag == 0:
+  if scen_flag == 0:
     params['force_flag']  = 0                                   # Select which type of forcing
     params['reff_lw']     = 3.7                                 # Longwave forcing [W m-2]
     params['reff_sw']     = 0                                   # Shortwave forcing [W m-2]
 
   ## High emissions
-  elif exp_flag == 1:
+  elif scen_flag == 1:
     params['force_flag']  = 1
     params['RF_end']      = 8.5 # [W m-2]
     params['RF_init']     = 0.0 # [W m-2]
     params['t_star']      = 50  # [years]
 
   ## Overshoot
-  elif exp_flag == 2:
+  elif scen_flag == 2:
     params['force_flag']  = 2
     params['a']           = 4     # [W m-2]
     params['b']           = 200   # [years]
@@ -412,11 +412,11 @@ def Run_Budyko_Sellers(exp_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0,
     #params['c']           = 60 # [growth rate]
 
   ## Impulse
-  elif exp_flag == 3:
+  elif scen_flag == 3:
     params['force_flag']  = 3
 
   else:
-    raise ValueError(f'Error, experiment {exp_flag} not recognized.')
+    raise ValueError(f'Error, scenario {scen_flag} not recognized.')
 
   if xi != 0:
     params['xi'] = xi

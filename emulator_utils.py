@@ -11,6 +11,11 @@ from scipy.integrate import solve_ivp
 import random
 import BudykoSellers
 
+import jax
+import jax.numpy as jnp
+from jax import grad, jacfwd, jacrev
+from jax.example_libraries import optimizers
+
 plt.rcParams['figure.figsize'] = [12, 4]
 plt.rcParams.update({'font.size': 16})
 plt.rcParams.update({
@@ -58,60 +63,153 @@ def generate_forcing(exp, t, t_end, t_star, n_boxes):
 
 def Lorenz_rho(t, omega, offset=50, exp=0):
   # Calculate rho for Lorenz-like system
-  if exp == 0:
-    return 60 + 30*np.tanh(omega*(t - 50))
-  elif exp == 1:
+  if exp == 0: # Abrupt doubling
+    return 60 + 30*np.tanh(omega*(t - offset))
+  elif exp == 1: # Exponential
+    return 60 + 30*np.tanh(1/50*(t - offset))
+  elif exp == 2: # Overshoot
+    return (60 + 30*np.tanh(omega*(t - offset)))*(2/3 - 1/3*np.tanh(2*omega*(t - offset - 2/omega)))
+  elif exp == 3: # Sinusoid
     return 60 + 30*np.sin(omega*t)
-  elif exp == 2:
+  elif exp == 4: # Noise
     return (0.25*np.exp(-t/5) + 0.75*np.exp(-t/0.05))*np.cos(2*np.pi*t/0.57)
+  elif exp == 5:
+    return 0
   else:
     raise ValueError('Error, unrecognized experiment.')
 
-def Lorenz_ddt(t, xv_flat, alpha, beta, sigma, omega, exp=0):
-  xv = xv_flat.reshape(-1, 3)
+def Lorenz_ddt(t, state_vec_flat, alpha, beta, sigma, omega, offset, exp=0, pert=0):
+  state_vec = state_vec_flat.reshape(-1, 3)
 
-  rho = Lorenz_rho(t, omega, exp)
-  x, y, z = xv[:,0], xv[:,1], xv[:,2]
+  rho = Lorenz_rho(t, omega, offset, exp) + pert
+  x, y, z = state_vec[:,0], state_vec[:,1], state_vec[:,2]
   dx = sigma*(y - x)
-  dy = -(x + alpha*np.pow(x,3)) + rho*x - y
+  dy = -(z + alpha*np.pow(z,3))*x + rho*x - y
   dz = x*y - beta*z
 
   ddt_flat = np.column_stack([dx, dy, dz]).ravel()
 
   return ddt_flat
 
-def Lorenz_integrate(t_max, dt, N, r, alpha, beta, sigma, omega, exp=0):
+def Lorenz_integrate(t_max, dt, N, r, alpha, beta, sigma, omega, offset, exp=0, FDT=False):
+
+  if N < 50:
+    n_snap = 1
+  else:
+    n_snap = 50
+
+  # Initial conditions
+  rho_0 = Lorenz_rho(exp, omega, offset, exp)
+  x0 = 2.0 * np.random.rand(N) - 1.0
+  y0 = 2.0 * np.random.rand(N) - 1.0
+  z0 = (rho_0 - 1) * np.ones(N)
+
+  # Combine x,y,z into one array of shape (N, 3)
+  state_vec = np.column_stack([x0, y0, z0])
+
+  # Pre-allocate arrays for storage
+  nt = int(t_max / dt) + 1
+  x_snap   = np.zeros((n_snap, nt))   # snapshot of first 50 x-values
+  y_snap   = np.zeros((n_snap, nt))   # snapshot of first 50 y-values
+  z_snap   = np.zeros((n_snap, nt))   # snapshot of first 50 z-values
+  z_mean   = np.zeros(nt)         # mean of z-component
+  z_max   = np.zeros((3, nt))    # max of each column in xv
+  z_std = np.zeros(nt)         # std of z-component
+  rho = np.zeros(nt)
+
+  # Fill initial values
+  j = 0
+  x_snap[:, j] = state_vec[:n_snap, 0]
+  y_snap[:, j] = state_vec[:n_snap, 1]
+  z_snap[:, j] = state_vec[:n_snap, 2]
+  z_mean[j]   = np.mean(state_vec[:, 2])
+  z_max[:, j] = np.max(state_vec, axis=0)
+  z_std[j]  = np.std(state_vec[:, 2])
+  rho[j] = rho_0
+
+  if FDT:
+    state_vec_pert = np.copy(state_vec)
+    state_vec_pert += 1
+
+    z_snap_pert = np.zeros((n_snap, nt))
+    z_snap_pert[:, j] = state_vec_pert[:n_snap, 2]
 
   if N < 50:
     n_snap = N
   else:
     n_snap = 50
 
+  t = 0
   while t < t_max:
     # Single-step ODE from t to t+dt using solve_ivp with method=RK45
-    sol = solve_ivp(Lorenz_ddt, [t, t + dt], xv.flatten(),
+    sol = solve_ivp(Lorenz_ddt, [t, t + dt], state_vec.flatten(),
                     method='RK45', t_eval=[t + dt],
-                    args=(alpha, beta, sigma, omega, exp))
+                    args=(alpha, beta, sigma, omega, offset, exp))
+
+    if FDT:
+      sol_FDT = solve_ivp(Lorenz_ddt, [t, t + dt], state_vec_pert.flatten(),
+                    method='RK45', t_eval=[t + dt],
+                    args=(alpha, beta, sigma, omega, offset, exp))
 
     # Extract the final state, reshape it back to (N,3)
-    xv = sol.y[:, -1].reshape((N, 3))
+    state_vec = sol.y[:, -1].reshape((N, 3))
+    if FDT:
+      state_vec_pert = sol_FDT.y[:, -1].reshape((N,3))
     t += dt
 
     # Add the Gaussian noise
-    xv += r * np.random.randn(*xv.shape)
+    noise = r * np.random.randn(*state_vec.shape)
+    state_vec += noise
+
+    if FDT:
+      state_vec_pert += noise
 
     # Store statistics
     j += 1
-    xs[j]   = np.mean(xv[:, 0])
-    xr[:, j] = xv[:n_snap, 0]
-    xm[:, j] = np.max(xv, axis=0)
-    xstd[j]  = np.std(xv[:, 0])
+    x_snap[:, j] = state_vec[:n_snap, 0]
+    y_snap[:, j] = state_vec[:n_snap, 1]
+    z_snap[:, j] = state_vec[:n_snap, 2]
+    z_mean[j]   = np.mean(state_vec[:, 2])
+    z_max[:, j] = np.max(state_vec, axis=0)
+    z_std[j]  = np.std(state_vec[:, 2])
+    rho[j] = Lorenz_rho(t, omega, offset, exp)
+
+    if FDT:
+      z_snap_pert[:, j] = state_vec_pert[:n_snap, 2]
+
+  if FDT:
+    G_FDT = np.mean(z_snap_pert - z_snap, axis=0) # perturbation is unit
+    return G_FDT, z_snap_pert, z_snap
+
+  return x_snap, y_snap, z_snap, z_mean, z_max, z_std, rho
+
+def Lorenz_plot(Z_mean, Z_std, t_vec, offset, T):
+  i_mid = np.where((t_vec >= offset - 3*T) & (t_vec <= offset + 3*T))[0]
+
+  fig, ax = plt.subplots(2, 1, figsize=(10,5), constrained_layout=True)
+  ax[0].plot(t_vec, Z_mean, c=brewer2_light(0), lw=2, label='mean')
+  ax[0].fill_between(t_vec, Z_mean - Z_std, Z_mean + Z_std, alpha=0.5, color=brewer2_light(0), label=r'$\sigma$')
+  ax[0].legend()
+
+  ax[1].plot(t_vec[i_mid], Z_mean[i_mid], c=brewer2_light(0), lw=2)
+  ax[1].fill_between(t_vec[i_mid], Z_mean[i_mid] - Z_std[i_mid], Z_mean[i_mid] + Z_std[i_mid], alpha=0.5, color=brewer2_light(0))
+
+  fig.suptitle(f'Cubic Lorenz System, Transition Time = {T}')
 
   return
 
 #####################################
 ## Functions to Diagnose Emulators ##
 #####################################
+
+def check_dim(var, transp=False):
+  if var.ndim == 1:
+    if transp:
+      return var.reshape(-1, 1)
+    else:
+      return var.reshape(1, -1)
+  else:
+    return var
 
 def method_0_PS(w):
   nx = len(w)
@@ -137,7 +235,6 @@ def method_1a_DMD(w, F):
 def method_1b_EDMD(w, F, dict_w, dict_F):
   # Calculate K using EDMD
   F = F.T
-  #F = np.hstack((F.T, np.zeros((F.shape[1], 2))))
 
   Phi_F = dict_F.transform(F[:-1,:])
   Phi_w = dict_w.transform(w[:,:-1].T)
@@ -153,24 +250,24 @@ def method_1b_EDMD(w, F, dict_w, dict_F):
 
 def method_2a_direct(n_boxes, diff_flag=0, vert_diff_flag=0, xi=0):
   # Calculate G directly
-  full_output = BudykoSellers.Run_Budyko_Sellers(exp_flag=3, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi)
+  full_output = BudykoSellers.Run_Budyko_Sellers(scen_flag=3, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi)
   G_direct = np.squeeze(full_output['T_ts'])[0:n_boxes,:]
 
   return G_direct
 
-def method_2b_FDT(n_ensemble, n_boxes, n_steps, xi, delta, exp_flag=0, diff_flag=0, vert_diff_flag=0):
+def method_2b_FDT(n_ensemble, n_boxes, n_steps, xi, delta, scen_flag=0, diff_flag=0, vert_diff_flag=0):
   # Calculate G from an ensemble using the FDT
   w, w_delta = np.zeros((n_ensemble, n_boxes, n_steps)), np.zeros((n_ensemble, n_boxes, n_steps))
 
   # Run n_ensemble number of ensemble members
   for n in range(n_ensemble):
     # Run unperturbed scenario
-    full_output_unperturbed = BudykoSellers.Run_Budyko_Sellers(exp_flag=exp_flag, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi)
+    full_output_unperturbed = BudykoSellers.Run_Budyko_Sellers(scen_flag=scen_flag, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi)
     w[n,:,:] = np.squeeze(full_output_unperturbed['T_ts'])[0:n_boxes,:]
     noise_ts = full_output_unperturbed['noise_ts']
 
     # Run perturbed scenario
-    full_output_perturbed = BudykoSellers.Run_Budyko_Sellers(exp_flag=exp_flag, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi, delta=delta, noise_ts=noise_ts)
+    full_output_perturbed = BudykoSellers.Run_Budyko_Sellers(scen_flag=scen_flag, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi, delta=delta, noise_ts=noise_ts)
     w_delta[n,:,:] = np.squeeze(full_output_perturbed['T_ts'])[0:n_boxes,:]
 
   # Take ensemble average divided by magnitude of perturbation
@@ -226,6 +323,268 @@ def method_4a_fit(w, F, t, dt, n_modes, n_boxes, B, A_DMD=None, B_DMD=None):
 
   return fit_opt_eigs(res.x, w, F_toep, t, dt, B, n_modes, n_boxes, apply=True)
 
+def method_4b_fit_jax(w, F, t, dt, n_modes, n_boxes, B, num_steps=100, verbose=False):
+
+  F_toep = sparse.csr_matrix(toeplitz(F[0,:], np.zeros_like(F[0,:])))
+  F_toep = jnp.array(F_toep.toarray())
+  dt = jnp.array(dt)
+  w = jnp.array(w)
+  B = jnp.array(B)
+  t = jnp.array(t)
+
+  def make_fit_opt_eigs_jax(n_modes: int, n_boxes: int):
+    """Return a function that knows n_modes, n_boxes as Python ints."""
+    def fit_opt_eigs_jax(params, w, F_toep, t, dt, B):
+      alpha = params[:n_modes * n_boxes].reshape((n_boxes, n_modes))
+      v = jnp.exp(alpha)
+      v_inv = jnp.linalg.pinv(v)
+      theta = params[n_modes * n_boxes : n_modes * n_boxes + n_modes]
+      lam = -jnp.exp(theta)
+
+      G_opt = jnp.zeros((n_boxes, len(t)))
+      for i, time_val in enumerate(t):
+        if i == 0:
+          continue
+        exp_diag_trunc = jnp.diag(jnp.exp(lam * time_val))
+        exp_Lt_trunc = v @ exp_diag_trunc @ v_inv
+        G_opt = G_opt.at[:, i].set(exp_Lt_trunc @ B)
+
+      model = (G_opt * dt) @ F_toep.T
+      return jnp.linalg.norm(w - model, ord=2)
+    return fit_opt_eigs_jax
+
+  initial_v = jax.random.normal(jax.random.PRNGKey(0), (n_modes*n_boxes,))
+  initial_theta = jax.random.normal(jax.random.PRNGKey(1), (n_modes,))
+  initial_params = jnp.concatenate([initial_v, initial_theta])
+
+  fit_fn = make_fit_opt_eigs_jax(n_modes=n_modes, n_boxes=n_boxes)
+  def cost_fn(params, w, F_toep, t, dt, B):
+    """
+    Cost function that calls fit_fn with your data.
+    """
+    return fit_fn(params, w, F_toep, t, dt, B)
+
+  learning_rate = 0.1
+  opt_init, opt_update, get_params = optimizers.adam(learning_rate)
+
+  @jax.jit
+  def update(step, opt_state, w, F_toep, t, dt, B):
+      params = get_params(opt_state)
+      # Compute gradients wrt. the cost
+      grads = jax.grad(cost_fn)(params, w, F_toep, t, dt, B)
+      # Apply the optimizer step
+      new_opt_state = opt_update(step, grads, opt_state)
+      return new_opt_state
+  # Initialize the optimizer with the initial parameters
+  opt_state = opt_init(initial_params)
+
+  for step_i in range(1000):
+    opt_state = update(step_i, opt_state, w, F_toep, t, dt, B)
+    if step_i % 100 == 0 and True:
+      # Optional: check cost
+      current_params = get_params(opt_state)
+      cval = cost_fn(current_params, w, F_toep, t, dt, B)
+      print(f"Step {step_i}, cost={cval:0.6f}")
+
+  opt_params = get_params(opt_state)
+  opt_params_trans = theta_to_lam(opt_params, n_modes, n_boxes)
+
+  if True:
+    print(opt_params_trans)
+
+  return fit_opt_eigs(opt_params_trans, w, F_toep, t, dt, B, n_modes, n_boxes, apply=True)
+
+def theta_to_lam(params, n_modes, n_boxes):
+  alpha = params[:n_modes * n_boxes]
+  v = jnp.exp(alpha)
+  theta = params[n_modes * n_boxes : n_modes * n_boxes + n_modes]
+  params = jnp.concatenate([v, -jnp.exp(theta)])
+  return params
+
+def method_4c_fit_amp(w, F, t, dt, n_modes, n_boxes, num_steps=100, verbose=False):
+
+  F_toep = sparse.csr_matrix(toeplitz(F[0,:], np.zeros_like(F[0,:])))
+  F_toep = jnp.array(F_toep.toarray())
+  dt = jnp.array(dt)
+  w = jnp.array(w)
+  t = jnp.array(t)
+
+  def make_fit_opt_eigs_jax(n_modes: int, n_boxes: int):
+    def fit_opt_eigs_amp(params, w, F_toep, t, dt):
+      #beta = params[:n_boxes]
+      #theta = params[n_boxes:]
+      beta = params[:n_boxes*n_modes].reshape((n_boxes, n_modes))
+      theta = params[n_boxes*n_modes:].reshape((n_modes, 1))
+      alpha = jnp.exp(beta)
+      #alpha = beta
+      alpha_diag = 1.0 / jnp.exp(jnp.diagonal(beta))
+      alpha = alpha.at[jnp.diag_indices(n_boxes)].set(alpha_diag)
+      lam = -jnp.exp(theta)
+      G_opt = jnp.zeros((n_boxes, len(t)))
+
+      for i, time_val in enumerate(t):
+        if i == 0:
+          continue
+        #exp_Lt_trunc = (1/alpha*jnp.exp(lam*time_val)).reshape(n_boxes)
+        exp_Lt_trunc = (alpha @ jnp.exp(lam*time_val)).reshape(n_boxes)
+        G_opt = G_opt.at[:, i].set(exp_Lt_trunc)
+
+      model = (G_opt * dt) @ F_toep.T
+      l1_penalty = 100*jnp.sum(jnp.abs(alpha * (1.0 - jnp.eye(alpha.shape[0]))))
+      return jnp.linalg.norm(w - model, ord=2) + l1_penalty
+    return fit_opt_eigs_amp
+
+  key1, key2 = np.random.normal(size=2)
+  #initial_phi = jax.random.normal(jax.random.PRNGKey(0), (n_boxes,))
+  #initial_phi = jax.random.normal(jax.random.PRNGKey(0), (n_modes*n_boxes,))
+  #initial_theta = jax.random.normal(jax.random.PRNGKey(1), (n_modes,))
+
+  if n_modes == 3:
+    initial_phi = np.log(np.array([1e2,1e-3,1e-3,1e-3,1,1e-3,1e-3,1e-3,1e1]))
+    initial_theta = np.log(np.array([1e-3,1e-1,1e-2]))
+  elif n_boxes == 1 and n_modes == 2:
+    initial_phi = np.log(np.array([1e2,1e-3]))
+    initial_theta = np.log(np.array([1e-3,1e-1]))
+  initial_params = jnp.concatenate([initial_phi, initial_theta])
+
+  fit_fn = make_fit_opt_eigs_jax(n_modes=n_modes, n_boxes=n_boxes)
+  def cost_fn(params, w, F_toep, t, dt):
+    """
+    Cost function that calls fit_fn with your data.
+    """
+    return fit_fn(params, w, F_toep, t, dt)
+
+  learning_rate = 0.1
+  opt_init, opt_update, get_params = optimizers.adam(learning_rate)
+
+  @jax.jit
+  def update(step, opt_state, w, F_toep, t, dt):
+    params = get_params(opt_state)
+    grads = jax.grad(cost_fn)(params, w, F_toep, t, dt)
+    new_opt_state = opt_update(step, grads, opt_state)
+    return new_opt_state
+
+  opt_state = opt_init(initial_params)
+
+  for step_i in range(1000):
+    opt_state = update(step_i, opt_state, w, F_toep, t, dt)
+    if step_i % 100 == 0 and False:
+      current_params = get_params(opt_state)
+      cval = cost_fn(current_params, w, F_toep, t, dt)
+      print(f"Step {step_i}, cost={cval:0.6f}")
+
+  opt_params = get_params(opt_state)
+
+  if verbose:
+    print(opt_params)
+
+  return apply_amp(opt_params, t, n_modes, n_boxes)
+
+def apply_amp(params, t, n_modes, n_boxes):
+  #beta = params[:n_boxes]
+  #theta = params[n_boxes:]
+  beta = params[:n_boxes*n_modes].reshape((n_boxes, n_modes))
+  theta = params[n_boxes*n_modes:].reshape((n_modes, 1))
+  alpha = jnp.exp(beta)
+  #alpha = beta
+  alpha_diag = 1.0 / jnp.exp(jnp.diagonal(beta))
+  alpha = alpha.at[jnp.diag_indices(n_boxes)].set(alpha_diag)
+  lam = -jnp.exp(theta)
+
+  G_opt = np.zeros((n_boxes, len(t)))
+
+  for i, n in enumerate(t):
+    if i == 0:
+      continue
+    #G_opt[:,i] = 1/alpha * jnp.exp(lam*n)
+    G_opt[:,i] = (alpha @ jnp.exp(lam*n)).reshape(n_boxes)
+
+  return G_opt
+
+def method_4d_fit_complex(w, F, t, dt, n_modes, n_boxes, num_steps=100, verbose=False):
+
+  F_toep = sparse.csr_matrix(toeplitz(F[0,:], np.zeros_like(F[0,:])))
+  F_toep = jnp.array(F_toep.toarray())
+  dt = jnp.array(dt)
+  w = jnp.array(w)
+  t = jnp.array(t)
+
+  def make_fit_opt_eigs_jax(n_modes: int, n_boxes: int):
+    def fit_opt_eigs_amp(params, w, F_toep, t, dt):
+      phi = params[:n_boxes]
+      theta = params[n_boxes:2*n_boxes]
+      beta = params[2*n_boxes:]
+      alpha = jnp.exp(phi)
+      lam = -jnp.exp(theta)
+      omega = jnp.exp(beta)
+      G_opt = jnp.zeros((n_boxes, len(t)))
+
+      for i, time_val in enumerate(t):
+        if i == 0:
+          continue
+        exp_Lt_trunc = (1/alpha*jnp.exp(1/alpha * (lam + 1j*omega)*time_val)).reshape(n_boxes)
+        G_opt = G_opt.at[:, i].set(exp_Lt_trunc)
+
+      model = (G_opt * dt) @ F_toep.T
+      return jnp.linalg.norm(w - model, ord=2)
+    return fit_opt_eigs_amp
+
+  key1, key2 = np.random.normal(size=2)
+  initial_phi = jax.random.normal(jax.random.PRNGKey(0), (n_modes,))
+  initial_theta = jax.random.normal(jax.random.PRNGKey(1), (n_modes,))
+  initial_beta = jax.random.normal(jax.random.PRNGKey(2), (n_modes,))
+  initial_params = jnp.concatenate([initial_phi, initial_theta, initial_beta])
+
+  fit_fn = make_fit_opt_eigs_jax(n_modes=n_modes, n_boxes=n_boxes)
+  def cost_fn(params, w, F_toep, t, dt):
+    """
+    Cost function that calls fit_fn with your data.
+    """
+    return fit_fn(params, w, F_toep, t, dt)
+
+  learning_rate = 0.1
+  opt_init, opt_update, get_params = optimizers.adam(learning_rate)
+
+  @jax.jit
+  def update(step, opt_state, w, F_toep, t, dt):
+    params = get_params(opt_state)
+    grads = jax.grad(cost_fn)(params, w, F_toep, t, dt)
+    new_opt_state = opt_update(step, grads, opt_state)
+    return new_opt_state
+
+  opt_state = opt_init(initial_params)
+
+  for step_i in range(100):
+    opt_state = update(step_i, opt_state, w, F_toep, t, dt)
+    if step_i % 10 == 0 and True:
+      current_params = get_params(opt_state)
+      cval = cost_fn(current_params, w, F_toep, t, dt)
+      print(f"Step {step_i}, cost={cval:0.6f}")
+
+  opt_params = get_params(opt_state)
+
+  if verbose:
+    print(opt_params)
+
+  return apply_complex(opt_params, t, n_modes, n_boxes)
+
+def apply_complex(params, t, n_modes, n_boxes):
+  phi = params[:n_boxes]
+  theta = params[n_boxes:2*n_boxes]
+  beta = params[2*n_boxes:]
+  alpha = jnp.exp(phi)
+  lam = -jnp.exp(theta)
+  omega = jnp.exp(beta)
+
+  G_opt = np.zeros((n_boxes, len(t)))
+
+  for i, n in enumerate(t):
+    if i == 0:
+      continue
+    G_opt[:,i] = 1/alpha*jnp.exp(1/alpha*(lam + 1j*omega)*n)
+
+  return G_opt
+
 def fit_opt_eigs(params, w, F_toep, t, dt, B, n_modes, n_boxes, apply=False):
   # Extract eigenvectors (flattened into a 1D vector) and eigenvalues from the parameter vector
   # The first m*n values correspond to the eigenvectors (flattened)
@@ -253,7 +612,7 @@ def fit_opt_eigs(params, w, F_toep, t, dt, B, n_modes, n_boxes, apply=False):
   return np.linalg.norm(w - model)
 
 def create_emulator(op_type, w, F, t=None, dt=None, n_boxes=None, w_dict=None, F_dict=None, n_modes=None, diff_flag=0,
-                    vert_diff_flag=0, B=None, xi=0, n_ensemble=None, n_steps=None, delta=0):
+                    vert_diff_flag=0, B=None, xi=0, n_ensemble=None, n_steps=None, delta=0, regularize=False, verbose=False):
   if op_type == 'DMD':
     A_DMD, B_DMD = method_1a_DMD(w, F)
     operator = (A_DMD, B_DMD)
@@ -263,7 +622,7 @@ def create_emulator(op_type, w, F, t=None, dt=None, n_boxes=None, w_dict=None, F
     operator = (A_EDMD, B_EDMD)
 
   elif op_type == 'deconvolve':
-    operator = method_3a_deconvolve(w, F, dt)
+    operator = method_3a_deconvolve(w, F, dt, regularize)
 
   elif op_type == 'direct':
     operator = method_2a_direct(n_boxes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi)
@@ -277,6 +636,15 @@ def create_emulator(op_type, w, F, t=None, dt=None, n_boxes=None, w_dict=None, F
   elif op_type == 'fit_DMD':
     A_DMD, B_DMD = method_1a_DMD(w, F)
     operator = method_4a_fit(w, F, t, dt, n_modes, n_boxes, B, A_DMD, B_DMD)
+
+  elif op_type == 'fit_jax':
+    operator = method_4b_fit_jax(w, F, t, dt, n_modes, n_boxes, B, num_steps=100, verbose=verbose)
+
+  elif op_type == 'fit_amp':
+    operator = method_4c_fit_amp(w, F, t, dt, n_modes, n_boxes, num_steps=100, verbose=verbose)
+
+  elif op_type == 'fit_complex':
+    operator = method_4d_fit_complex(w, F, t, dt, n_modes, n_boxes, num_steps=100, verbose=verbose)
 
   elif op_type == 'PS':
     operator = method_0_PS(w)
@@ -308,7 +676,6 @@ def emulate_DMD(F, A_DMD, B_DMD, w0, n_steps):
   return w_pred
 
 def emulate_EDMD(F, A_EDMD, B_EDMD, w0, n_steps, n_boxes, dict_w, dict_F):
-
   # x0 is shape (3,)
   # Convert to (1,3) for dictionary.transform
   phi0 = dict_w.transform(w0.reshape(1, -1))  # shape (1, n_lifted)
@@ -340,6 +707,8 @@ def emulate_EDMD(F, A_EDMD, B_EDMD, w0, n_steps, n_boxes, dict_w, dict_F):
 
 def emulate_response(F, G, dt):
   # Emulate a scenario with a response function
+  if F.ndim == 1:
+    F = F.reshape(1, -1)
   F_toeplitz = sparse.csr_matrix(toeplitz(F[0,:], np.zeros_like(F[0,:])))
   return G @ F_toeplitz.T * dt
 
@@ -357,7 +726,7 @@ def estimate_w(F, operator, op_type, dt=None, w0=None, n_steps=None, n_boxes=Non
   elif op_type == 'EDMD':
     A_EDMD, B_EDMD = operator
     w_est = emulate_EDMD(F, A_EDMD, B_EDMD, w0, n_steps, n_boxes, dict_w, dict_F)
-  elif op_type == 'deconvolve' or op_type == 'direct' or op_type == 'FDT' or op_type == 'fit' or op_type == 'fit_DMD':
+  elif op_type == 'deconvolve' or op_type == 'direct' or op_type == 'FDT' or op_type == 'fit' or op_type == 'fit_DMD' or op_type == 'fit_jax' or op_type == 'fit_amp' or op_type == 'fit_complex':
     w_est = emulate_response(F, operator, dt)
   elif op_type == 'PS':
     pattern = operator
@@ -371,6 +740,9 @@ def estimate_w(F, operator, op_type, dt=None, w0=None, n_steps=None, n_boxes=Non
 #####################
 ## Error Functions ##
 #####################
+def calc_NRMSE(w_true, w_est):
+  return calc_RMSE(w_true, w_est)/np.abs(np.mean(w_true,axis=1))*100
+
 def calc_RMSE(w_true, w_est):
   return np.sqrt(np.mean((w_true - w_est)**2,axis=1))
 
@@ -388,10 +760,12 @@ def calc_L2(w_true, w_est):
   return np.linalg.norm(w_true - w_est)
 
 def calc_error_metrics(w_true, w_est):
-  return [calc_RMSE(w_true, w_est), calc_MAE(w_true, w_est), calc_Bias(w_true, w_est), calc_MRE(w_true, w_est)]
+  #return [calc_RMSE(w_true, w_est), calc_MAE(w_true, w_est), calc_Bias(w_true, w_est), calc_MRE(w_true, w_est)]
+  return calc_NRMSE(w_true, w_est)
 
 def emulate_scenarios(op_type, scenarios=None, outputs=None, forcings=None, w0=None, t=None, dt=None, n_steps=None, n_boxes=None,
-                        w_dict=None, F_dict=None, n_modes=None, verbose=True, diff_flag=0, vert_diff_flag=0, B=None, xi=0, n_ensemble=None, delta=0):
+                        w_dict=None, F_dict=None, n_modes=None, verbose=True, diff_flag=0, vert_diff_flag=0, B=None, xi=0, n_ensemble=None,
+                        delta=0, t_range=None, regularize=False):
   operator, w_pred, error_metrics = {}, {}, {}
 
   if op_type == 'direct':
@@ -412,15 +786,20 @@ def emulate_scenarios(op_type, scenarios=None, outputs=None, forcings=None, w0=N
       if verbose:
         print(f'Train: {scen1} - L2 Error')
 
-      F1 = forcings[scen1]
-      w_true_1 = outputs[scen1]
+      F1, w_true_1 = forcings[scen1], outputs[scen1]
+      F1, w_true_1 = check_dim(F1), check_dim(w_true_1)
+
+      # Crop a specific range of time for training
+      if t_range is not None:
+        F1, w_true_1 = F1[:,t_range], w_true_1[:,t_range]
+
       operator[scen1] = create_emulator(op_type, w_true_1, F1, t=t, dt=dt, n_boxes=n_boxes, w_dict=w_dict,
                                        F_dict=F_dict, n_modes=n_modes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag,
-                                       B=B, xi=xi, n_ensemble=n_ensemble, delta=delta, n_steps=n_steps)
+                                       B=B, xi=xi, n_ensemble=n_ensemble, delta=delta, n_steps=n_steps, regularize=regularize, verbose=verbose)
 
       for scen2 in scenarios:
-        F2 = forcings[scen2]
-        w_true_2 = outputs[scen2]
+        F2, w_true_2 = forcings[scen2], outputs[scen2]
+        F2, w_true_2 = check_dim(F2), check_dim(w_true_2)
         w_pred[scen1][scen2] = estimate_w(F2, operator[scen1], op_type, dt, w0, n_steps, n_boxes, w_dict, F_dict, w=w_true_2)
         error_metrics[scen1][scen2] = calc_error_metrics(w_true_2, w_pred[scen1][scen2])
         if verbose:
@@ -432,13 +811,15 @@ def emulate_scenarios(op_type, scenarios=None, outputs=None, forcings=None, w0=N
 ## Ensemble Helper Functions ##
 ###############################
 
-def evaluate_ensemble(experiments, n_ensemble, n_choices, forcings_ensemble, w_ensemble, op_type, op_true, w0=None, n_steps=None,
-                      t=None, dt=None, n_boxes=None, w_dict=None, F_dict=None, n_modes=None, diff_flag=0, vert_diff_flag=0, B=None, xi=0, delta=0):
+def evaluate_ensemble(scenarios, n_ensemble, n_choices, forcings_ensemble, w_ensemble, op_type, op_true, w0=None, n_steps=None,
+                      t=None, dt=None, n_boxes=None, w_dict=None, F_dict=None, n_modes=None, diff_flag=0, vert_diff_flag=0, B=None, xi=0, delta=0, regularize=False):
 
-  operator_ensemble, operator_L2_avg, w_pred_L2 = {}, {}, {}
+  operator_true, operator_avg, operator_L2_avg, w_pred_L2 = {}, {}, {}, {}
 
   # Separate treament for direct diagnosis of response function (does this even make sense in this context?)
   if op_type == 'direct':
+    return False
+    """
     operator_ensemble, operator_L2_avg = [], []
 
     # Generate noisy ensemble for direct experiment
@@ -463,73 +844,82 @@ def evaluate_ensemble(experiments, n_ensemble, n_choices, forcings_ensemble, w_e
       operator_L2_avg.append(np.mean(operator_L2_subset))
 
     return operator_ensemble, operator_L2_avg
+    """
 
-  for exp_flag, exp1 in enumerate(experiments):
-    forcing_w = list(zip(forcings_ensemble[exp1],w_ensemble[exp1]))
-    operator_ensemble[exp1], operator_L2_avg[exp1], w_pred_L2[exp1] = [], [], {}
+  for scen_flag, scen1 in enumerate(scenarios):
+    forcing_w = list(zip(forcings_ensemble[scen1], w_ensemble[scen1]))
+    operator_avg[scen1], operator_L2_avg[scen1], w_pred_L2[scen1] = [], [], {}
+
+    # Take mean over the entire ensemble
+    mean_forcing = np.mean(np.stack(forcings_ensemble[scen1], axis=0), axis=0)
+    mean_w = np.mean(np.stack(w_ensemble[scen1], axis=0), axis=0)
+
+    operator_true[scen1] = create_emulator(op_type, mean_w, mean_forcing, t=t, dt=dt, n_boxes=n_boxes, w_dict=w_dict,
+                                       F_dict=F_dict, n_modes=n_modes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag,
+                                       B=B, xi=xi, n_ensemble=n_ensemble, delta=delta, n_steps=n_steps, regularize=regularize)
 
     # Setup data storage
-    for exp2 in experiments:
-      w_pred_L2[exp1][exp2] = []
+    for scen2 in scenarios:
+      w_pred_L2[scen1][scen2] = []
 
     # Iterate over ensemble subsets of length n
     for n in range(1,n_ensemble + 1):
       operator_subset, operator_L2_subset, w_pred_L2_subset = [], [], {}
 
-      for exp2 in experiments:
-        w_pred_L2_subset[exp2] = []
+      for scen2 in scenarios:
+        w_pred_L2_subset[scen2] = []
 
       # Repeatedly select subsets n_choices times
-      for i in range(n_choices):
+      for _ in range(n_choices):
         temp_choice = random.sample(forcing_w, n)
         forcing_choice, w_choice = zip(*temp_choice)
 
         # Take mean over the subset of ensemble members
-        mean_forcing = np.mean(np.stack(forcing_choice, axis=0), axis=0)
-        mean_w = np.mean(np.stack(w_choice, axis=0), axis=0)
+        mean_forcing_subset = np.mean(np.stack(forcing_choice, axis=0), axis=0)
+        mean_w_subset = np.mean(np.stack(w_choice, axis=0), axis=0)
 
         # Calculate operator over the subset
         if op_type == 'DMD':
-          A_DMD, B_DMD = method_1a_DMD(mean_w, mean_forcing)
+          A_DMD, B_DMD = method_1a_DMD(mean_w_subset, mean_forcing_subset)
           operator_temp = (A_DMD, B_DMD)
         elif op_type == 'EDMD':
-          A_EDMD, B_EDMD = method_1b_EDMD(mean_w, mean_forcing, w_dict, F_dict)
+          A_EDMD, B_EDMD = method_1b_EDMD(mean_w_subset, mean_forcing_subset, w_dict, F_dict)
           operator_temp = (A_EDMD, B_EDMD)
         elif op_type == 'deconvolve':
-          operator_temp = method_3a_deconvolve(mean_w, mean_forcing, dt, regularize=True)
+          operator_temp = method_3a_deconvolve(mean_w_subset, mean_forcing_subset, dt, regularize=True)
         elif op_type == 'fit':
-          operator_temp = method_4a_fit(mean_w, mean_forcing, t, dt, n_modes, n_boxes, B)
+          operator_temp = method_4a_fit(mean_w_subset, mean_forcing_subset, t, dt, n_modes, n_boxes, B)
         elif op_type == 'FDT':
-          operator_temp = method_2b_FDT(n, n_boxes, n_steps, xi, delta, exp_flag, diff_flag, vert_diff_flag)
+          operator_temp = method_2b_FDT(n, n_boxes, n_steps, xi, delta, scen_flag, diff_flag, vert_diff_flag)
 
         operator_subset.append(operator_temp)
 
         # Calculate error between ensemble and ground-truth operator
-        operator_L2_subset.append(np.linalg.norm(np.array(operator_temp) - np.array(op_true[exp1])))
+        operator_L2_subset.append(calc_NRMSE(np.array(operator_temp), np.array(op_true[scen1])))
 
         # Emulate output and calculate L2 to ground truth
-        for exp2 in experiments:
-          forcing_true = np.mean(forcings_ensemble[exp2], axis=0)
-          w_true = np.mean(w_ensemble[exp2], axis=0)
+        for scen2 in scenarios:
+          forcing_true = np.mean(forcings_ensemble[scen2], axis=0)
+          w_true = np.mean(w_ensemble[scen2], axis=0)
 
           w_pred_temp = estimate_w(forcing_true, operator_temp, op_type, dt, w0, n_steps, n_boxes, w_dict, F_dict)
-          w_pred_L2_subset[exp2].append(calc_L2(w_true, w_pred_temp))
+          w_pred_L2_subset[scen2].append(calc_NRMSE(w_true, w_pred_temp))
 
       # Calculate the average operator and error across the number of choices
       if op_type == 'DMD' or op_type == 'EDMD':
         A, B = zip(*operator_subset)
         A_mean, B_mean = np.mean(np.stack(A, axis=0), axis=0), np.mean(np.stack(B, axis=0), axis=0)
-        operator_ensemble[exp1].append((A_mean, B_mean))
+        operator_avg[scen1].append((A_mean, B_mean))
       elif op_type == 'deconvolve' or op_type == 'fit':
         R_mean = np.mean(np.stack(operator_subset, axis=0), axis=0)
-        operator_ensemble[exp1].append((R_mean))
+        operator_avg[scen1].append((R_mean))
 
-      operator_L2_avg[exp1].append(np.mean(operator_L2_subset))
+      operator_L2_avg[scen1].append(np.mean(operator_L2_subset))
 
-      for exp2 in experiments:
-        w_pred_L2[exp1][exp2].append(np.mean(w_pred_L2_subset[exp2]))
+      for scen2 in scenarios:
+        w_pred_L2[scen1][scen2].append(np.mean(w_pred_L2_subset[scen2]))
 
-  return operator_ensemble, operator_L2_avg, w_pred_L2
+  return operator_true, operator_avg, operator_L2_avg, w_pred_L2
 
 ##############################
 ## General Helper Functions ##
@@ -576,6 +966,8 @@ def plot_true_pred(T_true, T_pred, experiments, operator=None):
   for i, exp1 in enumerate(experiments):
     for j, exp2 in enumerate(experiments):
       T_true_temp, T_pred_temp = T_true[exp2].T, T_pred[exp1][exp2].T
+      T_true_temp, T_pred_temp = check_dim(T_true_temp, transp=True), check_dim(T_pred_temp, transp=True)
+
       n_boxes = T_true_temp.shape[1]
 
       if operator == 'PS':
@@ -658,6 +1050,12 @@ class Vector_Dict:
                                   self.params.get("gamma", 1.0))
     elif self.method == "hermite":
       return self._hermite_dictionary(X, self.params.get("degree", 2))
+    elif self.method == "damped_osc":
+      return self._damped_osc_dictionary(
+        X,
+        alpha=self.params.get("alpha", 1.0),
+        omega=self.params.get("omega", 1.0)
+        )
     else:
       raise ValueError(f"Unknown dictionary method: {self.method}")
 
@@ -741,6 +1139,37 @@ class Vector_Dict:
         Phi_list.append(herm_vals)
         # Stack all results => shape (n_basis, N) => transpose => (N, n_basis)
     return np.vstack(Phi_list).T
+
+  def _damped_osc_dictionary(self, X, alpha=1.0, omega=1.0):
+    """
+    Builds a dictionary for each dimension that includes:
+      1. e^{-alpha * x_i}          (pure exponential decay)
+      2. e^{-alpha * x_i} cos(omega * x_i)
+      3. e^{-alpha * x_i} sin(omega * x_i)
+
+    If X has shape (N_samples, D), each dimension i is expanded
+    into these 3 columns. We also include a global constant term.
+
+    Output shape: (N_samples, 1 + 3*D)
+      -> 1 is for the constant,
+          3*D is for each dimension's damped oscillator expansions.
+    """
+    N, D = X.shape
+    # Start with a global constant
+    Phi = []
+
+    # First, prepend non-lifted components
+    for i in range(D):
+      Phi.append(X[:, i])
+
+    for i in range(D):
+      xi = X[:, i]
+      exp_term = np.exp(-alpha * xi)
+      Phi.append(exp_term)                         # e^{-alpha x_i}
+      Phi.append(exp_term * np.cos(omega * xi))    # e^{-alpha x_i} cos(omega x_i)
+      Phi.append(exp_term * np.sin(omega * xi))    # e^{-alpha x_i} sin(omega x_i)
+
+    return np.vstack(Phi).T
 
 
 ###################
