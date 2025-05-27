@@ -10,6 +10,8 @@ from scipy.special import eval_hermite
 from scipy.integrate import solve_ivp
 import random
 import BudykoSellers
+import os.path
+import pickle as pkl
 
 import jax
 import jax.numpy as jnp
@@ -45,43 +47,116 @@ def overshoot(t, n_boxes):
   return np.tile(F, (n_boxes,1))
 
 def generate_forcing(exp, t, t_end, t_star, n_boxes):
-  if exp == '2xCO2':
+  if exp == 'Abrupt':
     n_t = len(t)
     F = abrupt_2xCO2(n_boxes, n_t)
 
   elif exp == 'High Emissions':
     F = high_emissions(8.5, t, t_end, t_star, n_boxes)
 
+  elif exp == 'Mid. Emissions':
+    F = high_emissions(4.5, t, t_end, t_star, n_boxes)
+
   elif exp == 'Overshoot':
     F = overshoot(t, n_boxes)
 
   return F
 
+########################################
+## Quasi-Equilibrium Helper Functions ##
+########################################
+
+def generate_QE(exp, F0=0, F1=10, N_step=100):
+  if exp not in ['3box_coup','2box_coup','lorenz']:
+    raise ValueError(f'Error: experiment {exp} not recognized.')
+
+  file_path = f'Quasi-Equilibrium/{exp}.pkl'
+  if os.path.isfile(file_path):
+    raise ValueError(f'Error: QE lookup table already exists for experiment {exp}.')
+
+  F_range = np.linspace(F0, F1, N_step)
+  QE_lookup = {}
+
+  for F in F_range:
+    if exp == '3box_coup':
+      full_outputs = BudykoSellers.Run_Budyko_Sellers(scen_flag=0, n_boxes=3, diff_flag=1, F0=F, int_yrs=1000)
+      T_out = np.squeeze(full_outputs['T_ts'])[0:3,:]
+      QE_lookup[F] = T_out[:,-1]
+
+  with open(file_path, 'wb') as file:
+    pkl.dump(QE_lookup, file)
+
+  return QE_lookup
+
+def load_QE(exp):
+
+  file_path = f'Quasi-Equilibrium/{exp}.pkl'
+  with open(file_path, 'rb') as file:
+    QE_lookup = pkl.load(file)
+
+  return QE_lookup
+
+def QE_interp(QE_lookup, F_vec, n_boxes):
+
+  if F_vec.ndim == 2:
+    F_vec = F_vec[0]
+
+  F_eq = np.array(sorted(QE_lookup))
+  T_eq = np.vstack([QE_lookup[k] for k in F_eq])
+
+  T_interp = np.zeros((n_boxes, len(F_vec)))
+
+  for i, F in enumerate(F_vec):
+    if F in QE_lookup:
+      T_interp[:,i] = QE_lookup[F]
+    else:
+
+      idx = np.searchsorted(F_eq, F)
+      if idx == 0:
+        i0, i1 = 0, 1
+      elif idx == len(F_eq):
+        i0, i1 = -2, -1
+      else:
+        i0, i1 = idx-1, idx
+
+    F0, F1 = F_eq[i0], F_eq[i1]
+    w = (F - F0) / (F1 - F0)
+
+    # Linear interpolation component-wise
+    T_interp[:,i] = (1 - w) * T_eq[i0] + w * T_eq[i1]
+
+  return T_interp
+
 ######################################
 ## Functions for Lorenz-like System ##
 ######################################
 
-def Lorenz_rho(t, omega, offset=50, exp=0):
+def Lorenz_rho(t, omega=1, offset=10, exp=0):
   # Calculate rho for Lorenz-like system
-  if exp == 0: # Abrupt doubling
-    return 60 + 30*np.tanh(omega*(t - offset))
-  elif exp == 1: # Exponential
-    return 60 + 30*np.tanh(1/50*(t - offset))
-  elif exp == 2: # Overshoot
-    return (60 + 30*np.tanh(omega*(t - offset)))*(2/3 - 1/3*np.tanh(2*omega*(t - offset - 2/omega)))
-  elif exp == 3: # Sinusoid
+  if exp == 0: # Abrupt
+    return 60 + 30*np.tanh(omega*(t - 10))
+  elif exp == 1: # High Emissions
+    return 30 + 70/(np.exp(250/50))*np.exp(t/50)
+  elif exp == 2: # Mid. Emissions
+    return 60 + 30*np.tanh(1/50*(t - 150))/np.tanh(5)
+  elif exp == 3: # Overshoot
+    return 30 + 50*np.exp(-np.power(t - 200,2)/(2*42.47**2))
+  elif exp == 4: # Sinusoid
     return 60 + 30*np.sin(omega*t)
-  elif exp == 4: # Noise
+  elif exp == 5: # Noise
     return (0.25*np.exp(-t/5) + 0.75*np.exp(-t/0.05))*np.cos(2*np.pi*t/0.57)
-  elif exp == 5:
-    return 0
+  elif exp == 6:
+    return 30 # Constant initial condition
   else:
     raise ValueError('Error, unrecognized experiment.')
 
-def Lorenz_ddt(t, state_vec_flat, alpha, beta, sigma, omega, offset, exp=0, pert=0):
+def Lorenz_ddt(t, state_vec_flat, alpha, beta, sigma, omega, offset, exp=0, FDT=False, pert=0, dt_imp=None):
   state_vec = state_vec_flat.reshape(-1, 3)
 
-  rho = Lorenz_rho(t, omega, offset, exp) + pert
+  rho = Lorenz_rho(t, omega, offset, exp)
+  if FDT and t < dt_imp:
+    rho += pert
+
   x, y, z = state_vec[:,0], state_vec[:,1], state_vec[:,2]
   dx = sigma*(y - x)
   dy = -(z + alpha*np.pow(z,3))*x + rho*x - y
@@ -91,18 +166,102 @@ def Lorenz_ddt(t, state_vec_flat, alpha, beta, sigma, omega, offset, exp=0, pert
 
   return ddt_flat
 
-def Lorenz_integrate(t_max, dt, N, r, alpha, beta, sigma, omega, offset, exp=0, FDT=False):
+def Lorenz_init(t_max, dt, N, r, alpha, beta, sigma, omega, offset=50, exp=6):
 
-  if N < 50:
-    n_snap = 1
-  else:
-    n_snap = 50
-
-  # Initial conditions
   rho_0 = Lorenz_rho(exp, omega, offset, exp)
   x0 = 2.0 * np.random.rand(N) - 1.0
   y0 = 2.0 * np.random.rand(N) - 1.0
   z0 = (rho_0 - 1) * np.ones(N)
+
+  # Combine x,y,z into one array of shape (N, 3)
+  state_vec = np.column_stack([x0, y0, z0])
+
+  t = 0
+  while t < t_max:
+    # Single-step ODE from t to t+dt using solve_ivp with method=RK45
+    sol = solve_ivp(Lorenz_ddt, [t, t + dt], state_vec.flatten(),
+                    method='RK45', t_eval=[t + dt],
+                    args=(alpha, beta, sigma, omega, offset, exp))
+
+    # Extract the final state, reshape it back to (N,3)
+    state_vec = sol.y[:, -1].reshape((N, 3))
+    t += dt
+
+    # Add the Gaussian noise
+    noise = r * np.random.randn(*state_vec.shape)
+    state_vec += noise
+
+  # Store statistics
+  x = state_vec[:, 0]
+  y = state_vec[:, 1]
+  z = state_vec[:, 2]
+
+  return x, y, z
+
+def Lorenz_FDT(N, dt, t_max):
+  # Params
+  sigma, beta = 10.0, 8 / 3
+  rho_base = 30.0
+  delta_rho = 1.0
+
+  D = 1.0
+  alpha = 1/1000
+  t = np.arange(0.0, t_max + dt, dt)
+  n_steps = t.size
+  sqrt_2Ddt = np.sqrt(2 * D * dt)
+
+  def lorenz(state, rho):
+    x, y, z = state[:, 0], state[:, 1], state[:, 2]
+    dx = sigma * (y - x)
+    dy = -(z + alpha*np.pow(z,3))*x + rho*x - y
+    dz = x * y - beta * z
+    return np.stack([dx, dy, dz], axis=1)
+
+  # Spin up
+  state0 = np.random.normal(0.0, 5.0, size=(N, 3))
+  warm_steps = 1000
+  for _ in range(warm_steps):
+    dW = np.random.normal(0.0, 0.1, size=state0.shape)
+    state0 += lorenz(state0, rho_base) * dt + sqrt_2Ddt * dW
+
+  # Baseline and perturbed ensembles share identical initial states
+  state_base = state0.copy()
+  state_pert = state0.copy()
+
+  # Store means
+  mean_base = np.zeros((n_steps, 3))
+  mean_pert = np.zeros_like(mean_base)
+  mean_base[0] = state_base.mean(axis=0)
+  mean_pert[0] = state_pert.mean(axis=0)
+
+  # Integrate
+  t_check = 0
+  for n in range(1, n_steps):
+    dW = np.random.normal(0.0, 0.1, size=state_base.shape)
+    state_base += lorenz(state_base, rho_base) * dt + sqrt_2Ddt * dW
+    if t_check < 1:
+      state_pert += lorenz(state_pert, rho_base + delta_rho) * dt + sqrt_2Ddt * dW
+    else:
+      state_pert += lorenz(state_pert, rho_base) * dt + sqrt_2Ddt * dW
+
+    mean_base[n] = state_base.mean(axis=0)
+    mean_pert[n] = state_pert.mean(axis=0)
+    t_check += dt
+
+  # FDT
+  R = (mean_pert - mean_base) / delta_rho
+
+  return R
+
+def Lorenz_integrate(t_max, dt, N, r, alpha, beta, sigma, omega, offset, x0, y0, z0, exp=0, FDT=False):
+
+  if N < 50:
+    n_snap = 1
+  else:
+    n_snap = N
+
+  # Initial conditions
+  rho_0 = Lorenz_rho(0, omega, offset, exp)
 
   # Combine x,y,z into one array of shape (N, 3)
   state_vec = np.column_stack([x0, y0, z0])
@@ -127,18 +286,6 @@ def Lorenz_integrate(t_max, dt, N, r, alpha, beta, sigma, omega, offset, exp=0, 
   z_std[j]  = np.std(state_vec[:, 2])
   rho[j] = rho_0
 
-  if FDT:
-    state_vec_pert = np.copy(state_vec)
-    state_vec_pert += 1
-
-    z_snap_pert = np.zeros((n_snap, nt))
-    z_snap_pert[:, j] = state_vec_pert[:n_snap, 2]
-
-  if N < 50:
-    n_snap = N
-  else:
-    n_snap = 50
-
   t = 0
   while t < t_max:
     # Single-step ODE from t to t+dt using solve_ivp with method=RK45
@@ -146,23 +293,13 @@ def Lorenz_integrate(t_max, dt, N, r, alpha, beta, sigma, omega, offset, exp=0, 
                     method='RK45', t_eval=[t + dt],
                     args=(alpha, beta, sigma, omega, offset, exp))
 
-    if FDT:
-      sol_FDT = solve_ivp(Lorenz_ddt, [t, t + dt], state_vec_pert.flatten(),
-                    method='RK45', t_eval=[t + dt],
-                    args=(alpha, beta, sigma, omega, offset, exp))
-
     # Extract the final state, reshape it back to (N,3)
     state_vec = sol.y[:, -1].reshape((N, 3))
-    if FDT:
-      state_vec_pert = sol_FDT.y[:, -1].reshape((N,3))
     t += dt
 
     # Add the Gaussian noise
     noise = r * np.random.randn(*state_vec.shape)
     state_vec += noise
-
-    if FDT:
-      state_vec_pert += noise
 
     # Store statistics
     j += 1
@@ -173,13 +310,6 @@ def Lorenz_integrate(t_max, dt, N, r, alpha, beta, sigma, omega, offset, exp=0, 
     z_max[:, j] = np.max(state_vec, axis=0)
     z_std[j]  = np.std(state_vec[:, 2])
     rho[j] = Lorenz_rho(t, omega, offset, exp)
-
-    if FDT:
-      z_snap_pert[:, j] = state_vec_pert[:n_snap, 2]
-
-  if FDT:
-    G_FDT = np.mean(z_snap_pert - z_snap, axis=0) # perturbation is unit
-    return G_FDT, z_snap_pert, z_snap
 
   return x_snap, y_snap, z_snap, z_mean, z_max, z_std, rho
 
@@ -248,10 +378,11 @@ def method_1b_EDMD(w, F, dict_w, dict_F):
 
   return A_EDMD, B_EDMD
 
-def method_2a_direct(n_boxes, diff_flag=0, vert_diff_flag=0, xi=0):
+def method_2a_direct(n_boxes, diff_flag=0, vert_diff_flag=0, xi=0, spatial_flag=0):
   # Calculate G directly
-  full_output = BudykoSellers.Run_Budyko_Sellers(scen_flag=3, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi)
-  G_direct = np.squeeze(full_output['T_ts'])[0:n_boxes,:]
+  full_output_unpert = BudykoSellers.Run_Budyko_Sellers(scen_flag=4, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi, spatial_flag=spatial_flag)
+  full_output_pert = BudykoSellers.Run_Budyko_Sellers(scen_flag=4, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi, spatial_flag=spatial_flag, delta=1)
+  G_direct = (np.squeeze(full_output_pert['T_ts'])[0:n_boxes,:] - np.squeeze(full_output_unpert['T_ts'])[0:n_boxes,:])/1
 
   return G_direct
 
@@ -612,7 +743,8 @@ def fit_opt_eigs(params, w, F_toep, t, dt, B, n_modes, n_boxes, apply=False):
   return np.linalg.norm(w - model)
 
 def create_emulator(op_type, w, F, t=None, dt=None, n_boxes=None, w_dict=None, F_dict=None, n_modes=None, diff_flag=0,
-                    vert_diff_flag=0, B=None, xi=0, n_ensemble=None, n_steps=None, delta=0, regularize=False, verbose=False):
+                    vert_diff_flag=0, B=None, xi=0, n_ensemble=None, n_steps=None, delta=0, regularize=False, verbose=False,
+                    spatial_flag=0, exp=None):
   if op_type == 'DMD':
     A_DMD, B_DMD = method_1a_DMD(w, F)
     operator = (A_DMD, B_DMD)
@@ -625,7 +757,7 @@ def create_emulator(op_type, w, F, t=None, dt=None, n_boxes=None, w_dict=None, F
     operator = method_3a_deconvolve(w, F, dt, regularize)
 
   elif op_type == 'direct':
-    operator = method_2a_direct(n_boxes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi)
+    operator = method_2a_direct(n_boxes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi, spatial_flag=spatial_flag)
 
   elif op_type == 'FDT':
     operator = method_2b_FDT(n_ensemble, n_boxes, n_steps,  xi, delta, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag)
@@ -648,6 +780,9 @@ def create_emulator(op_type, w, F, t=None, dt=None, n_boxes=None, w_dict=None, F
 
   elif op_type == 'PS':
     operator = method_0_PS(w)
+
+  elif op_type == 'QE':
+    operator = load_QE(exp)
 
   else:
     raise ValueError(f'Operator type {op_type} not recognized.')
@@ -710,6 +845,7 @@ def emulate_response(F, G, dt):
   if F.ndim == 1:
     F = F.reshape(1, -1)
   F_toeplitz = sparse.csr_matrix(toeplitz(F[0,:], np.zeros_like(F[0,:])))
+  print(dt)
   return G @ F_toeplitz.T * dt
 
 #####################################
@@ -731,6 +867,8 @@ def estimate_w(F, operator, op_type, dt=None, w0=None, n_steps=None, n_boxes=Non
   elif op_type == 'PS':
     pattern = operator
     w_est = emulate_PS(w, pattern)
+  elif op_type == 'QE':
+    w_est = QE_interp(operator, F, n_boxes)
   else:
     raise ValueError(f'Operator type {op_type} not recognized.')
 
@@ -765,11 +903,11 @@ def calc_error_metrics(w_true, w_est):
 
 def emulate_scenarios(op_type, scenarios=None, outputs=None, forcings=None, w0=None, t=None, dt=None, n_steps=None, n_boxes=None,
                         w_dict=None, F_dict=None, n_modes=None, verbose=True, diff_flag=0, vert_diff_flag=0, B=None, xi=0, n_ensemble=None,
-                        delta=0, t_range=None, regularize=False):
+                        delta=0, t_range=None, regularize=False, spatial_flag=0, exp=None):
   operator, w_pred, error_metrics = {}, {}, {}
 
   if op_type == 'direct':
-    operator = create_emulator(op_type, None, None, n_boxes=n_boxes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag)
+    operator = create_emulator(op_type, None, None, n_boxes=n_boxes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, spatial_flag=spatial_flag)
     if verbose:
       print(f'Train: Impulse Forcing - L2 Error')
 
@@ -795,7 +933,8 @@ def emulate_scenarios(op_type, scenarios=None, outputs=None, forcings=None, w0=N
 
       operator[scen1] = create_emulator(op_type, w_true_1, F1, t=t, dt=dt, n_boxes=n_boxes, w_dict=w_dict,
                                        F_dict=F_dict, n_modes=n_modes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag,
-                                       B=B, xi=xi, n_ensemble=n_ensemble, delta=delta, n_steps=n_steps, regularize=regularize, verbose=verbose)
+                                       B=B, xi=xi, n_ensemble=n_ensemble, delta=delta, n_steps=n_steps, regularize=regularize,
+                                       verbose=verbose, exp=exp)
 
       for scen2 in scenarios:
         F2, w_true_2 = forcings[scen2], outputs[scen2]
@@ -961,7 +1100,7 @@ def fit_opt_hyper(params, w, F_toep):
 
 def plot_true_pred(T_true, T_pred, experiments, operator=None):
   n_exp = len(experiments)
-  fig, ax = plt.subplots(n_exp, n_exp, figsize=(12,12), constrained_layout=True)
+  fig, ax = plt.subplots(n_exp, n_exp, figsize=(12,12), constrained_layout=True, sharex='col', sharey='row')
 
   for i, exp1 in enumerate(experiments):
     for j, exp2 in enumerate(experiments):

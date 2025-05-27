@@ -158,6 +158,12 @@ def SolverBudykoSellers(const, grid, params, init, time):
     RFLW = lambda t: amp * np.exp(t / t_star)
 
   elif force_flag == 2:
+    # tanh forcing case (longwave only)
+    beta = 1/50
+    RFSW = lambda t: 0
+    RFLW = lambda t: 2.25 + 2.25*np.tanh(beta*(t - 150))/np.tanh(250*beta)
+
+  elif force_flag == 3:
     # Gaussian forcing case (longwave only)
     a = params['a'] # [W m-2]
     b = params['b'] # [years]
@@ -166,7 +172,7 @@ def SolverBudykoSellers(const, grid, params, init, time):
     RFSW = lambda t: 0
     RFLW = lambda t: a * np.exp(-np.power(t - b,2)/(2 * c**2))
 
-  elif force_flag == 3:
+  elif force_flag == 4:
     # Impulse forcing case (longwave only)
     RFSW = lambda t: 0
     RFLW = lambda t: 1 if t <= 1 else 0
@@ -232,7 +238,11 @@ def SolverBudykoSellers(const, grid, params, init, time):
       RFLW_n = RFLW(tc_years) + noise + delta
     else:
       RFLW_n = RFLW(tc_years) + noise
+
     OLR = (A - RFLW_n + B*T_arr[:,0].T)
+    if 'spatial' in params:
+      OLR[params['spatial'][0]] = 0
+      OLR[params['spatial'][1]] = 0
 
     # Calculate stag_D depending on current temperatures
     gl_avg = np.sum(T_arr[:,0].T*weight_factor)
@@ -321,7 +331,7 @@ def SolverBudykoSellers(const, grid, params, init, time):
 
   return out
 
-def Run_Budyko_Sellers(scen_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0, n_boxes=3, noise_ts=None):
+def Run_Budyko_Sellers(scen_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0, n_boxes=3, noise_ts=None, spatial_flag=0, F0=3.7, int_yrs=250):
   # Initialize dictionaries
   grid, params, init, const, time = {}, {}, {}, {}, {}
 
@@ -365,6 +375,17 @@ def Run_Budyko_Sellers(scen_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0
     params['K'] = 0.7                                        # Vertical diffusivity [W m-2 K-1]
     params['stag_z'] = np.array([[0.0, 55.2105, 709.7600]])
 
+  if spatial_flag != 0:
+    grid['dz_slabs'] = np.array([10, 150, 1500])  # Water slabs thickness [m]
+    params['B'] = np.array([0.86, 2.0, 0.67])   # Feedback parameters [W m-2 K-1]
+
+    if spatial_flag == 1:
+      params['spatial'] = (1,2)
+    elif spatial_flag == 2:
+      params['spatial'] = (0,2)
+    elif spatial_flag == 3:
+      params['spatial'] = (0,1)
+
   # Initialize temperature
   init['T0'] = 0                                          # Initial temperature [K]
   if vert_diff_flag == 0:
@@ -373,7 +394,7 @@ def Run_Budyko_Sellers(scen_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0
     init['T'] = np.array([[0.,0.]])
 
   # Set time parameters
-  time['int_yrs'] = 250                                                            # Integration time [years]
+  time['int_yrs'] = int_yrs                                                            # Integration time [years]
   time['save_f'] = 365                                                            # Save every time.save_f [days]
   time['dt'] = 3600 * 6 * 16                                                           # Time step [seconds]
   time['NT'] = int(round((time['int_yrs'] * 3600 * 24 * 365.24) / time['dt']))    # Number of time steps
@@ -393,7 +414,7 @@ def Run_Budyko_Sellers(scen_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0
   ## Abrupt 2xCO2
   if scen_flag == 0:
     params['force_flag']  = 0                                   # Select which type of forcing
-    params['reff_lw']     = 3.7                                 # Longwave forcing [W m-2]
+    params['reff_lw']     = F0                                 # Longwave forcing [W m-2]
     params['reff_sw']     = 0                                   # Shortwave forcing [W m-2]
 
   ## High emissions
@@ -403,17 +424,24 @@ def Run_Budyko_Sellers(scen_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0
     params['RF_init']     = 0.0 # [W m-2]
     params['t_star']      = 50  # [years]
 
-  ## Overshoot
+  ## Mid. emissions
   elif scen_flag == 2:
     params['force_flag']  = 2
+    params['RF_end']      = 4.5 # [W m-2]
+    params['RF_init']     = 0.0 # [W m-2]
+    params['t_star']      = 50  # [years]
+
+  ## Overshoot
+  elif scen_flag == 3:
+    params['force_flag']  = 3
     params['a']           = 4     # [W m-2]
     params['b']           = 200   # [years]
     params['c']           = 42.47 # [growth rate]
     #params['c']           = 60 # [growth rate]
 
   ## Impulse
-  elif scen_flag == 3:
-    params['force_flag']  = 3
+  elif scen_flag == 4:
+    params['force_flag']  = 4
 
   else:
     raise ValueError(f'Error, scenario {scen_flag} not recognized.')

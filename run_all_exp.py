@@ -47,12 +47,16 @@ def run_all(basis, degree, methods, experiments, scenarios, n_modes=1, noisy=Fal
                                                       n_boxes=n_boxes,
                                                       diff_flag=diff_flag,
                                                       vert_diff_flag=vert_diff_flag)
-      forcings[exp][scen] = np.tile(temp_outputs['forcing_ts'], (n_boxes, 1))
+      if n_boxes > 1:
+        forcings[exp][scen] = np.tile(temp_outputs['forcing_ts'], (n_boxes, 1))
+      else:
+        forcings[exp][scen] = temp_outputs['forcing_ts']
       T_out[exp][scen] = np.squeeze(temp_outputs['T_ts'])[0:n_boxes,:]
 
+
       # Zero out oceanic forcing
-      if vert_diff_flag == 1:
-        forcings[exp][scen][1] = np.zeros(len(forcings[exp][scen][1]))
+      #if vert_diff_flag == 1:
+      #  forcings[exp][scen][1] = np.zeros(len(forcings[exp][scen][1]))
 
   # Emulate scenarios
   for method in methods:
@@ -60,7 +64,10 @@ def run_all(basis, degree, methods, experiments, scenarios, n_modes=1, noisy=Fal
     operator[method], T_pred[method], error_metrics[method] = {}, {}, {}
     for i, exp in enumerate(experiments):
       n_boxes = get_num_boxes(i)
-      n_modes = n_boxes
+      if n_boxes == 1:
+        n_modes = 2
+      else:
+        n_modes = n_boxes
       # Initial condition
       w0 = np.zeros(n_boxes)
 
@@ -113,12 +120,11 @@ def get_num_boxes(i):
   if i <= 1:
     n_boxes = 3
   else:
-    n_boxes = 2
+    n_boxes = 1
   return n_boxes
 
 def plot_error_heatmaps(error_metrics, exp, regions,
-                        methods, train_scenarios, test_scenarios,
-                        error_labels=None):
+                        methods, train_scenarios, test_scenarios):
   """
   Generate a grid of heatmaps for a given experiment and region.
 
@@ -184,14 +190,17 @@ def plot_error_heatmaps(error_metrics, exp, regions,
       else:
         for scen1 in train_scenarios:
           for scen2 in test_scenarios:
-            value = error_metrics[method][exp][scen1][scen2][region_idx]
+            try:
+              value = error_metrics[method][exp][scen1][scen2][region_idx]
+            except:
+              value = error_metrics[scen1][scen2][region_idx]
             if value < min_val:
               min_val = value
             if value > max_val:
               max_val = value
 
-    if max_val > 10:
-      max_val = 10
+    if max_val > 5:
+      max_val = 5
 
     for col_idx, method in enumerate(methods):
       ax = axes[region_idx, col_idx]
@@ -207,7 +216,10 @@ def plot_error_heatmaps(error_metrics, exp, regions,
           elif method == 'direct':
             row_values.append(0)
           else:
-            value = error_metrics[method][exp][scen1][scen2][region_idx]
+            try:
+              value = error_metrics[method][exp][scen1][scen2][region_idx]
+            except:
+              value = error_metrics[scen1][scen2][region_idx]
             row_values.append(value)
         data_matrix.append(row_values)
 
