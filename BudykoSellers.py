@@ -180,6 +180,8 @@ def SolverBudykoSellers(const, grid, params, init, time):
   ## Time integration
   # Initialize main variables
   T_new = Tinit
+  #if 'delta' in params:
+  #  T_new += delta
 
   # Create NaN-filled arrays with the appropriate shapes
   T_ts = np.full((NL, NZ, NS), np.nan)
@@ -396,7 +398,7 @@ def Run_Budyko_Sellers(scen_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0
   # Set time parameters
   time['int_yrs'] = int_yrs                                                            # Integration time [years]
   time['save_f'] = 365                                                            # Save every time.save_f [days]
-  time['dt'] = 3600 * 6 * 16                                                           # Time step [seconds]
+  time['dt'] = 3600 * 24 * 7                                                           # Time step [seconds]
   time['NT'] = int(round((time['int_yrs'] * 3600 * 24 * 365.24) / time['dt']))    # Number of time steps
   time['DS'] = int(round(time['save_f'] * 3600 * 24 / time['dt']))                # Save every time['DS']
   time['NS'] = math.floor(time['NT'] / time['DS']) + 1                            # Number of save times

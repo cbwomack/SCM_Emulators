@@ -11,7 +11,7 @@ from scipy.integrate import solve_ivp
 import random
 import BudykoSellers
 import os.path
-import pickle as pkl
+import pickle
 
 import jax
 import jax.numpy as jnp
@@ -134,13 +134,17 @@ def QE_interp(QE_lookup, F_vec, n_boxes):
 def Lorenz_rho(t, omega=1, offset=10, exp=0):
   # Calculate rho for Lorenz-like system
   if exp == 0: # Abrupt
-    return 60 + 30*np.tanh(omega*(t - 10))
+    #return 30 + 2*np.tanh(omega*(t - 10))
+    return 45 + 17*np.tanh(omega*(t - 10))
   elif exp == 1: # High Emissions
-    return 30 + 70/(np.exp(250/50))*np.exp(t/50)
+    #return 28 + 4/(np.exp(250/50))*np.exp(t/50)
+    return 28 + 30/(np.exp(250/50))*np.exp(t/50)
   elif exp == 2: # Mid. Emissions
-    return 60 + 30*np.tanh(1/50*(t - 150))/np.tanh(5)
+    #return 29 + np.tanh(1/50*(t - 150))/np.tanh(5)
+    return 40 + 12*np.tanh(1/50*(t - 150))/np.tanh(5)
   elif exp == 3: # Overshoot
-    return 30 + 50*np.exp(-np.power(t - 200,2)/(2*42.47**2))
+    #return 28 + np.exp(-np.power(t - 200,2)/(2*42.47**2))
+    return 28 + 30*np.exp(-np.power(t - 200,2)/(2*50**2))
   elif exp == 4: # Sinusoid
     return 60 + 30*np.sin(omega*t)
   elif exp == 5: # Noise
@@ -267,7 +271,7 @@ def Lorenz_integrate(t_max, dt, N, r, alpha, beta, sigma, omega, offset, x0, y0,
   state_vec = np.column_stack([x0, y0, z0])
 
   # Pre-allocate arrays for storage
-  nt = int(t_max / dt) + 1
+  nt = int(t_max / dt) + 2
   x_snap   = np.zeros((n_snap, nt))   # snapshot of first 50 x-values
   y_snap   = np.zeros((n_snap, nt))   # snapshot of first 50 y-values
   z_snap   = np.zeros((n_snap, nt))   # snapshot of first 50 z-values
@@ -350,9 +354,32 @@ def method_0_PS(w):
 
   return pattern
 
+import numpy as np
+
+
+def method_0b_gen_PS(w, F):
+  F = np.asarray(F)
+  F = F.reshape(1, -1)
+  w = np.asarray(w)
+
+  if w.ndim == 1:            # single grid‐point case
+    w = w.reshape(1, -1)
+  elif w.shape[0] == F.shape[1] and w.shape[1] != F.shape[1]:
+    # transpose to (Nx, Nt)
+    w = w.T
+
+  if w.shape[1] != F.shape[1]:
+    raise ValueError("Time dimension of w must match that of F")
+
+  XtX = F @ F.T                    # shape (1, 1)
+  pattern = (1.0 / XtX) @ (F @ w.T)   # shape (1, Nx)
+
+  return pattern
+
 def method_1a_DMD(w, F):
   # Calculate L using DMD
   # Assume F is of size (nx, nt)
+  w, F = check_dim(w), check_dim(F)
   Omega = np.concatenate([w[:,:-1],F[:,:-1]])
   L = w[:,1:] @ np.linalg.pinv(Omega)
   n = len(w)
@@ -364,6 +391,7 @@ def method_1a_DMD(w, F):
 
 def method_1b_EDMD(w, F, dict_w, dict_F):
   # Calculate K using EDMD
+  w, F = check_dim(w), check_dim(F)
   F = F.T
 
   Phi_F = dict_F.transform(F[:-1,:])
@@ -378,11 +406,11 @@ def method_1b_EDMD(w, F, dict_w, dict_F):
 
   return A_EDMD, B_EDMD
 
-def method_2a_direct(n_boxes, diff_flag=0, vert_diff_flag=0, xi=0, spatial_flag=0):
+def method_2a_direct(n_boxes, diff_flag=0, vert_diff_flag=0, xi=0, spatial_flag=0, delta=0):
   # Calculate G directly
   full_output_unpert = BudykoSellers.Run_Budyko_Sellers(scen_flag=4, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi, spatial_flag=spatial_flag)
-  full_output_pert = BudykoSellers.Run_Budyko_Sellers(scen_flag=4, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi, spatial_flag=spatial_flag, delta=1)
-  G_direct = (np.squeeze(full_output_pert['T_ts'])[0:n_boxes,:] - np.squeeze(full_output_unpert['T_ts'])[0:n_boxes,:])/1
+  full_output_pert = BudykoSellers.Run_Budyko_Sellers(scen_flag=4, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi, spatial_flag=spatial_flag, delta=delta)
+  G_direct = (np.squeeze(full_output_pert['T_ts'])[0:n_boxes,:] - np.squeeze(full_output_unpert['T_ts'])[0:n_boxes,:])/delta
 
   return G_direct
 
@@ -408,6 +436,7 @@ def method_2b_FDT(n_ensemble, n_boxes, n_steps, xi, delta, scen_flag=0, diff_fla
 
 def method_3a_deconvolve(w, F, dt, regularize=False):
   # Calculate G using deconvolution
+  F = check_dim(F)
   F_toep = sparse.csr_matrix(toeplitz(F[0,:], np.zeros_like(F[0,:])))
 
   if regularize:
@@ -632,7 +661,10 @@ def apply_amp(params, t, n_modes, n_boxes):
 
   return G_opt
 
-def method_4d_fit_complex(w, F, t, dt, n_modes, n_boxes, num_steps=100, verbose=False):
+def method_4d_fit_complex_old(w, F, t, dt, n_modes, n_boxes, num_steps=500, verbose=False):
+
+  F = check_dim(F)
+  w = check_dim(w)
 
   F_toep = sparse.csr_matrix(toeplitz(F[0,:], np.zeros_like(F[0,:])))
   F_toep = jnp.array(F_toep.toarray())
@@ -699,6 +731,95 @@ def method_4d_fit_complex(w, F, t, dt, n_modes, n_boxes, num_steps=100, verbose=
 
   return apply_complex(opt_params, t, n_modes, n_boxes)
 
+
+
+def method_4d_fit_complex(w, F, t, dt, n_modes, n_boxes, num_steps=500, learning_rate=0.1, verbose=False):
+
+    # --- 1. Data Preparation ---
+    # This part remains mostly the same
+    F = check_dim(F)
+    w = check_dim(w)
+
+    F_toep = sparse.csr_matrix(toeplitz(F[0,:], np.zeros_like(F[0,:])))
+    F_toep_T = jnp.array(F_toep.T.toarray()) # Pre-calculate transpose and convert to JAX array
+    dt = jnp.array(dt)
+    w = jnp.array(w)
+    t = jnp.array(t)
+
+    # --- 2. Vectorized Cost Function ---
+    # The nested factory function is removed for clarity.
+    # The core logic is now directly in cost_fn.
+    def cost_fn(params, w_target, t_vec, F_matrix_T):
+        phi = params[:n_boxes]
+        theta = params[n_boxes:2*n_boxes]
+        beta = params[2*n_boxes:]
+
+        alpha = jnp.exp(phi)
+        lam = -jnp.exp(theta)
+        omega = jnp.exp(beta)
+
+        # KEY OPTIMIZATION: Vectorize the loop over time `t` using broadcasting.
+        # This replaces the slow Python `for` loop.
+        alpha_r = alpha[:, jnp.newaxis]
+        lam_r = lam[:, jnp.newaxis]
+        omega_r = omega[:, jnp.newaxis]
+        t_r = t_vec[jnp.newaxis, :]
+
+        # G_opt is now calculated in a single, fast operation
+        G_opt = (1/alpha_r) * jnp.exp((1/alpha_r) * (lam_r + 1j*omega_r) * t_r)
+
+        model = (G_opt * dt) @ F_matrix_T
+        return jnp.linalg.norm(w_target - model, ord=2)
+
+    # --- 3. JIT-Compiled Training Step (Optimized) ---
+    opt_init, opt_update, get_params = optimizers.adam(learning_rate)
+
+    @jax.jit
+    def update_step(step, opt_state, w_target, t_vec, F_matrix_T):
+        # Get current parameters from the optimizer state
+        params = get_params(opt_state)
+        
+        # KEY OPTIMIZATION: Calculate loss and gradients at the same time
+        # to avoid redundant forward passes.
+        loss_value, grads = jax.value_and_grad(cost_fn)(params, w_target, t_vec, F_matrix_T)
+        
+        # Update the optimizer state
+        new_opt_state = opt_update(step, grads, opt_state)
+        
+        return new_opt_state, loss_value
+
+    # --- 4. Initialization and Training Loop ---
+    # Proper JAX-style random key initialization
+    key = jax.random.PRNGKey(42)
+    key, phi_key, theta_key, beta_key = jax.random.split(key, 4)
+    initial_phi = jax.random.normal(phi_key, (n_modes,))
+    initial_theta = jax.random.normal(theta_key, (n_modes,))
+    initial_beta = jax.random.normal(beta_key, (n_modes,))
+    initial_params = jnp.concatenate([initial_phi, initial_theta, initial_beta])
+
+    # Initialize optimizer
+    opt_state = opt_init(initial_params)
+
+    # Cleaned-up training loop
+    for step_i in range(num_steps):
+        # The update function now returns the loss value directly
+        opt_state, cval = update_step(step_i, opt_state, w, t, F_toep_T)
+        
+        if False:#step_i % 10 == 0:
+            print(f"Step {step_i}, cost={cval:0.6f}")
+
+    # Get final parameters after training
+    opt_params = get_params(opt_state)
+
+    if verbose:
+        print("Final optimized parameters:", opt_params)
+
+    return apply_complex(opt_params, t, n_modes, n_boxes)
+
+
+
+
+
 def apply_complex(params, t, n_modes, n_boxes):
   phi = params[:n_boxes]
   theta = params[n_boxes:2*n_boxes]
@@ -757,7 +878,7 @@ def create_emulator(op_type, w, F, t=None, dt=None, n_boxes=None, w_dict=None, F
     operator = method_3a_deconvolve(w, F, dt, regularize)
 
   elif op_type == 'direct':
-    operator = method_2a_direct(n_boxes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi, spatial_flag=spatial_flag)
+    operator = method_2a_direct(n_boxes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, xi=xi, spatial_flag=spatial_flag, delta=delta)
 
   elif op_type == 'FDT':
     operator = method_2b_FDT(n_ensemble, n_boxes, n_steps,  xi, delta, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag)
@@ -802,6 +923,7 @@ def emulate_PS(w, pattern):
 
 def emulate_DMD(F, A_DMD, B_DMD, w0, n_steps):
   # Emulate a scenario with DMD
+  F = check_dim(F)
   w_pred = np.zeros((w0.shape[0], n_steps))
   w_pred[:, 0] = w0
 
@@ -813,6 +935,7 @@ def emulate_DMD(F, A_DMD, B_DMD, w0, n_steps):
 def emulate_EDMD(F, A_EDMD, B_EDMD, w0, n_steps, n_boxes, dict_w, dict_F):
   # x0 is shape (3,)
   # Convert to (1,3) for dictionary.transform
+  F = check_dim(F)
   phi0 = dict_w.transform(w0.reshape(1, -1))  # shape (1, n_lifted)
   phi0 = phi0.flatten()                            # (n_lifted,)
 
@@ -845,7 +968,6 @@ def emulate_response(F, G, dt):
   if F.ndim == 1:
     F = F.reshape(1, -1)
   F_toeplitz = sparse.csr_matrix(toeplitz(F[0,:], np.zeros_like(F[0,:])))
-  print(dt)
   return G @ F_toeplitz.T * dt
 
 #####################################
@@ -907,7 +1029,7 @@ def emulate_scenarios(op_type, scenarios=None, outputs=None, forcings=None, w0=N
   operator, w_pred, error_metrics = {}, {}, {}
 
   if op_type == 'direct':
-    operator = create_emulator(op_type, None, None, n_boxes=n_boxes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, spatial_flag=spatial_flag)
+    operator = create_emulator(op_type, None, None, n_boxes=n_boxes, diff_flag=diff_flag, vert_diff_flag=vert_diff_flag, spatial_flag=spatial_flag, delta=delta)
     if verbose:
       print(f'Train: Impulse Forcing - L2 Error')
 
@@ -1063,12 +1185,15 @@ def evaluate_ensemble(scenarios, n_ensemble, n_choices, forcings_ensemble, w_ens
 ##############################
 ## General Helper Functions ##
 ##############################
-"""
-def L_to_G():
-  # Convert a linear operator to a response function
-
+def save_error(metrics, name):
+  with open(f'Error Results/{name}.pkl', 'wb') as file:
+    pickle.dump(metrics, file)
   return
-"""
+
+def open_error(name):
+  with open(f'Error Results/{name}.pkl', 'rb') as file:
+    metric = pickle.load(file)
+  return metric
 
 def get_regularization(w, F):
   init_params = np.random.rand(2)  # Start with log(1), log(1)
@@ -1195,6 +1320,8 @@ class Vector_Dict:
         alpha=self.params.get("alpha", 1.0),
         omega=self.params.get("omega", 1.0)
         )
+    elif self.method == "deriv":
+      return self._data_and_derivative_dictionary(X)
     else:
       raise ValueError(f"Unknown dictionary method: {self.method}")
 
@@ -1309,6 +1436,40 @@ class Vector_Dict:
       Phi.append(exp_term * np.sin(omega * xi))    # e^{-alpha x_i} sin(omega x_i)
 
     return np.vstack(Phi).T
+
+  def _data_and_derivative_dictionary(self, X):
+    """
+    Creates a dictionary from the input data and its discrete derivative.
+
+    The derivative is approximated using finite differences, assuming the
+    samples in X are sequential and equally spaced in time. It uses a
+    forward difference for all points except the last, for which a
+    backward difference is used.
+
+    If X has shape (N_samples, N_features), the output dictionary will
+    have shape (N_samples, 2 * N_features).
+    """
+    N, D = X.shape
+
+    # Handle cases with insufficient data to compute a derivative
+    if N < 2:
+      # Return the data concatenated with columns of zeros for the derivative
+      return np.hstack([X, np.zeros_like(X)])
+
+    # Initialize an array to hold the derivative approximation
+    X_dot = np.zeros_like(X)
+
+    # Compute derivative using forward difference for all but the last point
+    # X_dot[t] = X[t+1] - X[t]
+    X_dot[:-1, :] = np.diff(X, axis=0)
+
+    # For the last point, use a backward difference
+    # X_dot[-1] = X[-1] - X[-2]
+    X_dot[-1, :] = X[-1, :] - X[-2, :]
+
+    # Concatenate the original data and its derivative side-by-side
+    # The new features are [x_1, ..., x_D, x_dot_1, ..., x_dot_D]
+    return np.hstack([X, X_dot])
 
 
 ###################
