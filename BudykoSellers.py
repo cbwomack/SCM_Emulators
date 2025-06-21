@@ -140,14 +140,14 @@ def SolverBudykoSellers(const, grid, params, init, time):
 
   # Switch the forcing function for both shortwave and longwave
   if force_flag == 0:
-    # Constant forcing case
+    # Abrupt
     reff_sw = params['reff_sw']
     reff_lw = params['reff_lw']
     RFSW = lambda t: reff_sw
     RFLW = lambda t: reff_lw
 
   elif force_flag == 1:
-    # Exponential forcing case (longwave only)
+    # High Emissions
     RF_end = params['RF_end']  # W m-2
     RF_init = params['RF_init']  # W m-2
     t_star = params['t_star']  # years
@@ -158,13 +158,13 @@ def SolverBudykoSellers(const, grid, params, init, time):
     RFLW = lambda t: amp * np.exp(t / t_star)
 
   elif force_flag == 2:
-    # tanh forcing case (longwave only)
+    # Mid. Emissions
     beta = 1/50
     RFSW = lambda t: 0
     RFLW = lambda t: 2.25 + 2.25*np.tanh(beta*(t - 150))/np.tanh(250*beta)
 
   elif force_flag == 3:
-    # Gaussian forcing case (longwave only)
+    # Overshoot
     a = params['a'] # [W m-2]
     b = params['b'] # [years]
     c = params['c'] # [growth rate]

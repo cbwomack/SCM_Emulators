@@ -134,16 +134,12 @@ def QE_interp(QE_lookup, F_vec, n_boxes):
 def Lorenz_rho(t, omega=1, offset=10, exp=0):
   # Calculate rho for Lorenz-like system
   if exp == 0: # Abrupt
-    #return 30 + 2*np.tanh(omega*(t - 10))
     return 45 + 17*np.tanh(omega*(t - 10))
   elif exp == 1: # High Emissions
-    #return 28 + 4/(np.exp(250/50))*np.exp(t/50)
     return 28 + 30/(np.exp(250/50))*np.exp(t/50)
   elif exp == 2: # Mid. Emissions
-    #return 29 + np.tanh(1/50*(t - 150))/np.tanh(5)
     return 40 + 12*np.tanh(1/50*(t - 150))/np.tanh(5)
   elif exp == 3: # Overshoot
-    #return 28 + np.exp(-np.power(t - 200,2)/(2*42.47**2))
     return 28 + 30*np.exp(-np.power(t - 200,2)/(2*50**2))
   elif exp == 4: # Sinusoid
     return 60 + 30*np.sin(omega*t)
