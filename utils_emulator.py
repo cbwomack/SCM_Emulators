@@ -290,12 +290,12 @@ def method_IVa_modal(w, F, t, dt, n_modes, n_boxes,
 
   # Initial guess for amplitudes and eigenvalues, experiment-specific
   if n_modes == 3:
-      initial_phi   = np.log([1e2, 1e-3, 1e-3,
+      initial_phi   = np.log([1e2,  1e-3, 1e-3,
                               1e-3, 1,    1e-3,
                               1e-3, 1e-3, 1e1])
       initial_theta = np.log([1e-3, 1e-1, 1e-2])
   elif n_boxes == 1 and n_modes == 2:
-      initial_phi   = np.log([1e2, 1e-3])
+      initial_phi   = np.log([1e2,  1e-3])
       initial_theta = np.log([1e-3, 1e-1])
   initial_params = jnp.concatenate([initial_phi, initial_theta])
 
@@ -1109,7 +1109,7 @@ def evaluate_ensemble(op_type, w_ensemble, w_mean, F_ensemble, F_mean, scenarios
       else:
         w_and_F = list(zip(w_ensemble[train], F_ensemble[train]))
 
-      if train == 'Mid. Emissions' or train == 'Overshoot':
+      if train == 'Plateau' or train == 'Overshoot':
         lam = 1e1
       else:
         lam = 1e-4
@@ -1424,7 +1424,7 @@ def plot_true_pred_FDT(T_true, T_pred, experiments):
 
   # Initialize subplots
   n_exp = len(experiments)
-  fig, ax = plt.subplots(1, n_exp, figsize=(12,4), constrained_layout=True)
+  fig, ax = plt.subplots(1, n_exp, figsize=(12,4), constrained_layout=True, sharey=True)
 
   # Iterate over all experiments
   for i, exp in enumerate(experiments):

@@ -235,8 +235,8 @@ def plot_scenarios(experiments, scenarios, val_mean, val_std, t_vec_box, t_vec_l
           title = r'\textit{Abrupt}'
         elif scen == 'High Emissions':
           title = r'\textit{High Emissions}'
-        elif scen == 'Mid. Emissions':
-          title = r'\textit{Mid. Emissions}'
+        elif scen == 'Plateau':
+          title = r'\textit{Plateau}'
         elif scen == 'Overshoot':
           title = r'\textit{Overshoot}'
         ax[i,j].set_title(title, fontsize=24, va="center")
@@ -497,7 +497,7 @@ def plot_single_heatmap(error_metrics: dict,
 
   # Configure labels and title for the subplot
   ax.set_title(long_title)
-  tick_labels = ['Abr.','Hi. Em.', 'Mid. Em.', 'Over.']
+  tick_labels = ['Abr.','Hi. Em.', 'Plat.', 'Over.']
 
   if add_xlabel:
     ax.set_xticklabels(tick_labels, rotation=45, ha="right")
@@ -662,8 +662,8 @@ def plot_box_true_pred(experiments, scenarios, T_out, T_pred, regions, save_fig=
           title = r'\textit{Abrupt}'
         elif scen == 'High Emissions':
           title = r'\textit{High Emissions}'
-        elif scen == 'Mid. Emissions':
-          title = r'\textit{Mid. Emissions}'
+        elif scen == 'Plateau':
+          title = r'\textit{Plateau}'
         elif scen == 'Overshoot':
           title = r'\textit{Overshoot}'
         ax[j].set_title(title, fontsize=18, va="center")
@@ -714,12 +714,12 @@ def plot_ensemble_error_multi(NRMSE_all, NRMSE_all_base, scenarios, methods, tra
 
   # Figure setup (varies by experiment)
   if cubLor:
-    fig, ax = plt.subplots(3, 2, figsize=(14,8), sharex=True, sharey='row', layout='constrained')
+    fig, ax = plt.subplots(3, 2, figsize=(14,8), sharex=True, sharey=True, layout='constrained')
     xaxis = np.arange(1, 5_001, 5_001//50)
     panel_labels = ['(a)', '(b)', '(c)', '(d)', '(e)', '(f)']
     x_shift, y_shift = -0.07, 1.18
   else:
-    fig, ax = plt.subplots(2, 2, figsize=(14,8), sharex=True, sharey='row', layout='constrained')
+    fig, ax = plt.subplots(2, 2, figsize=(14,8), sharex=True, sharey=True, layout='constrained')
     xaxis = np.arange(1,51)
     extra = [mlines.Line2D([], [], color='k', linestyle='-',  label='Noisy', lw=2, alpha=0.6),
            mlines.Line2D([], [], color='k', linestyle='--', label='Noiseless', lw=2, alpha=0.6)]

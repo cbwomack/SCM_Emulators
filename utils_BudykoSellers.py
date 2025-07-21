@@ -172,7 +172,7 @@ def SolverBudykoSellers(const, grid, params, init, time):
     RFLW = lambda t: amp * np.exp(t / t_star)
 
   elif force_flag == 2:
-    # Mid. Emissions
+    # Plateau
     beta = 1/50
     RFSW = lambda t: 0
     RFLW = lambda t: 2.25 + 2.25*np.tanh(beta*(t - 150))/np.tanh(250*beta)
@@ -475,7 +475,7 @@ def Run_Budyko_Sellers(scen_flag=0, diff_flag=0, vert_diff_flag=0, xi=0, delta=0
     params['RF_init']     = 0.0 # [W m-2]
     params['t_star']      = 50  # [years]
 
-  ## Mid. emissions
+  ## Plateau
   elif scen_flag == 2:
     params['force_flag']  = 2
     params['RF_end']      = 4.5 # [W m-2]
