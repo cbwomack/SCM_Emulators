@@ -32,7 +32,7 @@ Each experiment has a consistent set of four scenarios, with parameters that dif
 |------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | _Abrupt_         | An abrupt doubling of CO concentration; corresponds roughly to the _Abrupt2xCO2_ CMIP experiment.                                                                |
 | _High Emissions_ | An exponential increase of CO2 concentration in time; corresponds roughly to _SSP585_.                                                                           |
-| _Mid. Emissions_ | An increase in CO2 concentration in time that follows a hyperbolic tangent, increasing exponentially and then tapering off; corresponds roughly to _SSP245_.     |
+| _Plateau_        | An increase in CO2 concentration in time that follows a hyperbolic tangent, increasing exponentially and then tapering off; corresponds roughly to _SSP245_.     |
 | _Overshoot_      | An increase in CO2 concentration in time that follows a Gaussian profile, increasing and decreasingly rapidly; inspired by _SSP119_, but decreases more quickly. |
 
 See manuscript for more details on experiments, emulators, and scenarios.
