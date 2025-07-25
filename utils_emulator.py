@@ -11,7 +11,6 @@ from scipy.linalg import toeplitz
 from scipy.sparse.linalg import spsolve_triangular
 from scipy.optimize import minimize
 from scipy.special import eval_hermite
-from scipy.integrate import solve_ivp
 
 ## Optimization
 import jax
