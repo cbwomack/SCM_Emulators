@@ -68,7 +68,7 @@ def plot_baseline_fig2(scen, val_mean, val_std, t_vec, only_mean=False, save_fig
   ax.tick_params(axis='both', which='major', labelsize=14)
 
   if save_fig:
-    plt.savefig(f'Figures/{fig_name}.pdf',dpi=300)
+    plt.savefig(f'Figures/{fig_name}.pdf')
 
   return
 
@@ -111,7 +111,7 @@ def plot_alt_fig2(scenarios, val_mean, val_std, t_vec, save_fig=False, fig_name=
   ax[0].set_ylabel(r'Temperature [$^\circ$C]',fontsize=18)
 
   if save_fig:
-    plt.savefig(f'Figures/{fig_name}.pdf',dpi=300)
+    plt.savefig(f'Figures/{fig_name}.pdf')
 
   return
 
@@ -158,7 +158,7 @@ def plot_pdf_fig2(scen, ensemble, save_fig=False, fig_name=None):
   ax.set_ylabel("Temperature PDF",fontsize=18)
 
   if save_fig:
-    plt.savefig(f'Figures/{fig_name}.pdf',dpi=300)
+    plt.savefig(f'Figures/{fig_name}.pdf')
 
   return
 
@@ -244,7 +244,7 @@ def plot_scenarios(experiments, scenarios, val_mean, val_std, t_vec_box, t_vec_l
       ax[i,j].tick_params(axis='both', which='major', labelsize=18)
 
   if save_fig:
-    plt.savefig(f'Figures/{fig_name}.pdf',dpi=300)
+    plt.savefig(f'Figures/{fig_name}.pdf')
 
   return
 
@@ -419,7 +419,7 @@ def plot_emulator_bars(experiments, all_errors, save_fig=False, fig_name=None):
   ax.set_xticklabels(experiments)
 
   if save_fig:
-    plt.savefig(f'Figures/{fig_name}.pdf',dpi=300)
+    plt.savefig(f'Figures/{fig_name}.pdf')
 
   return
 
@@ -588,7 +588,7 @@ def plot_error_heatmap_grid(error_metrics: dict,
   cbar.outline.set_visible(False)
 
   if save_fig:
-    plt.savefig(f'Figures/{fig_name}.pdf', dpi=300)
+    plt.savefig(f'Figures/{fig_name}.pdf')
 
   return
 
@@ -673,7 +673,7 @@ def plot_box_true_pred(experiments, scenarios, T_out, T_pred, regions, save_fig=
   fig.suptitle('Emulator performance, Method II: FDT', fontsize=24)
 
   if save_fig:
-    plt.savefig(f'Figures/{fig_name}.pdf',dpi=300)
+    plt.savefig(f'Figures/{fig_name}.pdf')
 
   return
 
@@ -767,7 +767,7 @@ def plot_ensemble_error_multi(NRMSE_all, NRMSE_all_base, scenarios, methods, tra
   fig.suptitle(f'NRMSE vs. Ensemble size by method\nTraining scenario: $\it{{{train}}}$',fontsize=24)
 
   if save_fig:
-    plt.savefig(f'Figures/{fig_name}.pdf',dpi=300)
+    plt.savefig(f'Figures/{fig_name}.pdf')
 
   return
 
@@ -817,6 +817,6 @@ def plot_Lorenz_response(R_50k, R_5k, R_500, t, save_fig=False, fig_name=None):
   ax.set_title('Cubic Lorenz Response Function', fontsize=24)
 
   if save_fig:
-    plt.savefig(f'Figures/{fig_name}.pdf',dpi=300)
+    plt.savefig(f'Figures/{fig_name}.pdf')
 
   return

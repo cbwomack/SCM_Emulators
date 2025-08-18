@@ -62,7 +62,7 @@ def cub_lorenz(state, rho, sigma, alpha, beta):
 
   # Evaluate cubic Lorenz RHS
   dx = sigma * (y - x)
-  dy = -(z + alpha*np.pow(z,3))*x + rho*x - y
+  dy = -(z + alpha*np.power(z,3))*x + rho*x - y
   dz = x * y - beta * z
   return np.stack([dx, dy, dz], axis=1)
 
