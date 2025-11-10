@@ -54,7 +54,7 @@ def plot_baseline_fig2(scen, val_mean, val_std, t_vec, only_mean=False, save_fig
   """
 
   # Figure setup
-  fig, ax = plt.subplots(figsize=(6,4), constrained_layout=True)
+  fig, ax = plt.subplots(figsize=(10,4), constrained_layout=True)
 
   # Plot each component and standard deviation (optional)
   for i in range(len(val_mean[scen])):
